@@ -483,11 +483,11 @@
     </ul>
     <div class="hint">
       Two modes. SOL: one ship vs the Mandate in this solar system (works from a local file, no network).<br>
-      GALAXY: internet rooms, 25 worlds, four races — create a room, share the code. Live:
+      GALAXY: internet rooms on two computers — CREATE ROOM, share the 5-character code, JOIN ROOM. Live:
       <b>https://z3ph1rus.github.io/ringfire/</b><br>
       Keyboard: rotate · 1–9 warp · SPACE photons · F phasers · X detonate · H hop · B beam · M map.
     </div>
-    <div id="lanNote">GALAXY: create a room or join with a code. Live: https://z3ph1rus.github.io/ringfire/</div>
+    <div id="lanNote">GALAXY: two computers, same URL. CREATE ROOM on one, JOIN ROOM with the code on the other. Live: https://z3ph1rus.github.io/ringfire/</div>
     <div class="bubble-line" id="titleBubble"></div>
   </div>
 
@@ -529,8 +529,8 @@
     </ul>
     <p><b style="color:var(--amber);font-weight:normal;">GALAXY (INTERNET ROOMS)</b></p>
     <ul>
-      <li>Open <kbd>https://z3ph1rus.github.io/ringfire/</kbd>. One player CREATE ROOM and reads the 4-character code (shown large) plus this URL. Others JOIN ROOM with that code.</li>
-      <li>Two tabs on that same URL with the same code = two players. The host browser runs the match; closing the host tab ends it.</li>
+      <li>Open <kbd>https://z3ph1rus.github.io/ringfire/</kbd> on EACH COMPUTER. One player CREATE ROOM and reads the 5-character code (shown large). The other JOIN ROOM with that code.</li>
+      <li>Two computers, one room. Two tabs still work as a test. The host browser runs the match; closing the host tab/computer ends it.</li>
       <li>Pick a name and a race (required). Four teams: Helios (gold, medium), Veil (green, slow/heavy), Spark (cyan, fast/light), Mandate (amber, medium-plus guns).</li>
       <li>Multiple humans may share a race — it is a team. Host starts the match. Optional “fill empty races with AI”. Cap 12.</li>
       <li>25 worlds, homes in the four corners (3 planets each, 50 armies). Two neutrals on each edge, five in the center (25 self-ruled armies).</li>
@@ -595,19 +595,20 @@
     <div id="gxRoomGate">
       <h2>GALAXY  —  INTERNET ROOM</h2>
       <p style="max-width:70ch;font-size:13px;line-height:1.5;margin-bottom:16px">
-        Host creates a room and reads the code. Guests type that code. Same race = teammates.
-        The host browser runs the war. Live site: https://z3ph1rus.github.io/ringfire/
+        Open this page on EACH COMPUTER. One player CREATE ROOM and reads the 5-character code.
+        The other JOIN ROOM with that code. Same race = teammates. The host tab must stay open — it runs the war.
+        Live: https://z3ph1rus.github.io/ringfire/
       </p>
       <ul class="menu">
         <li data-act="create" id="gxCreate">[ C ] CREATE ROOM</li>
       </ul>
       <div style="margin-top:18px;color:var(--amber);font-size:13px">OR JOIN WITH A CODE</div>
-      <input id="gxJoinCode" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false">
+      <input id="gxJoinCode" maxlength="5" placeholder="XXXXX" autocomplete="off" spellcheck="false">
       <ul class="menu" style="margin-top:10px">
         <li data-act="joinroom" id="gxJoinBtn">[ J ] JOIN ROOM</li>
       </ul>
       <div id="gxNetErr"></div>
-      <div class="hint">Two tabs on this page with the same code = two players. No python. No LAN IP. Cap 12.</div>
+      <div class="hint">Two computers (or two tabs as a test). No python. No same-Wi-Fi. No WebRTC. Host stays on the page. Cap 12.</div>
     </div>
 
     <div id="gxRaceLobby" style="display:none">

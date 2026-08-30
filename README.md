@@ -4,7 +4,7 @@
 Two modes, one dart.
 
 - **SOL** — one player vs Mandate AI in a compact solar system. Open `index.html` (no server).
-- **GALAXY** — internet team war. 25 planets, four races, host-authoritative rooms. Play at https://z3ph1rus.github.io/ringfire/
+- **GALAXY** — internet team war on two computers. 25 planets, four races, host-authoritative MQTT rooms. Play at https://z3ph1rus.github.io/ringfire/
 
 Inspired by 1973 PLATO Empire (John Daleske et al.) and 1983 Apple II solar-system war games. Original names, art, and code — not a clone of any commercial title, disk, or asset.
 
@@ -15,21 +15,21 @@ Open `index.html` in a browser, or the live page. No server, no install, no netw
 
 Live: **https://z3ph1rus.github.io/ringfire/**
 
-## Run GALAXY (internet rooms)
-Open **https://z3ph1rus.github.io/ringfire/** (or this same `index.html` from GitHub Pages / any static HTTP host).
+## Run GALAXY (two computers)
+Open **https://z3ph1rus.github.io/ringfire/** on **each computer** (same static page; GitHub Pages, no install).
 
-1. Title → **GALAXY — INTERNET ROOM**.
-2. One player **CREATE ROOM**. A 4-character code is shown large, plus the Pages URL. That tab is the host — it runs the simulation.
-3. Everyone else **JOIN ROOM** and types the code.
-4. Pick a race (required). Same race = teammates. **READY**. Host **START MATCH**. Optional **FILL EMPTY RACES WITH AI**. Cap 12.
+1. Computer A: Title → **GALAXY — INTERNET ROOM** → **CREATE ROOM**. A 5-character code is shown large.
+2. Computer B: same URL → **JOIN ROOM** and types that code.
+3. Pick a race (required). Same race = teammates. **READY**. Host **START MATCH**. Optional **FILL EMPTY RACES WITH AI**. Cap 12.
+4. The host tab/computer must stay open — it runs the simulation. Closing it ends the match.
 
-**Two-tab test on the live URL:** open https://z3ph1rus.github.io/ringfire/ twice. Tab A: CREATE ROOM, copy the code, pick Helios, Ready. Tab B: JOIN ROOM, type the code, pick Spark, Ready. Tab A starts. Fly toward each other (~20–40s at cruise from a home cluster to a neighbor). Capture a neutral on the edge: bomb, detonate (`X`), beam down (`B`).
+Share text is: open https://z3ph1rus.github.io/ringfire/ on EACH COMPUTER, JOIN ROOM with this code. Host tab/computer must stay open.
 
-Rooms use the public PeerJS broker (`0.peerjs.com`) and WebRTC data channels. No API keys, no python, no LAN IP, no port 7474. Closing the host tab ends the match.
+**Two-tab test (same machine):** open the live URL twice. Tab A CREATE ROOM, tab B JOIN ROOM with the code. Two tabs still work, but the real path is two computers.
 
-If the lobby says **could not reach matchmaking — retry**, the broker or CDN was blocked — try again, or another network.
+Both browsers make outbound WSS connections to a public MQTT broker (EMQX, HiveMQ fallback). That broker is only a matchmaking pipe — not our server. Do not put secrets in chat. No python, no same-Wi-Fi, no WebRTC, no port 7474.
 
-Symmetric NATs / some campus firewalls need a TURN server we do not run; those peers may fail to connect even when the room code is correct.
+If join says **no room with that code — is the host still on the page?**, the host left or the code is wrong. **could not reach matchmaking — retry** means the public broker or MQTT.js CDN was blocked.
 
 ## Optional: GALAXY on a LAN (python fallback)
 Only if you want same-Wi-Fi play without the public broker:
@@ -39,7 +39,7 @@ cd ringfire
 python3 server.py
 ```
 
-Python 3 standard library only (no pip, no npm). The server binds `0.0.0.0:7474` (or the next free port) and prints a Wi-Fi URL. Everyone on that network opens it; race select is the first GALAXY screen (no room code). Internet rooms stay the default on GitHub Pages and any origin that is not this python server.
+Python 3 standard library only (no pip, no npm). The server binds `0.0.0.0:7474` (or the next free port) and prints a Wi-Fi URL. Everyone on that network opens it; race select is the first GALAXY screen (no room code). GitHub Pages always uses MQTT rooms.
 
 ## Races (GALAXY — pick one before spawn)
 It is a **team**. Several humans may share a race.

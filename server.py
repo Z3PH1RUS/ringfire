@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # RINGFIRE GALAXY — optional LAN fallback (host-authoritative HTTP)
-# Default multiplayer is internet rooms on GitHub Pages (PeerJS, no python).
+# Default multiplayer is internet MQTT rooms on GitHub Pages (no python).
 # Python 3 stdlib only. Inspired by 1973 PLATO Empire (Daleske et al.)
 # Original names, map dressing, and code. No copied assets.
 """RINGFIRE GALAXY LAN host (optional).

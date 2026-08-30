@@ -1,7 +1,7 @@
 /* RINGFIRE — original game by Caine
    Inspired by 1983 solar-system war games (Apple II) and 1973 PLATO Empire (Daleske et al.).
    Original code, original dart-class silhouette, original UI, original race names.
-   file:// plays SOL. GALAXY is internet rooms (PeerJS) or optional python3 server.py LAN. */
+   file:// plays SOL. GALAXY is internet rooms (MQTT broker) or optional python3 server.py LAN. */
 (function () {
   "use strict";
 
@@ -2122,18 +2122,23 @@
   };
 
   var PAGES_URL = "https://z3ph1rus.github.io/ringfire/";
-  var PEER_CDNS = [
-    "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
-    "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"
+  var MQTT_CDNS = [
+    "https://unpkg.com/mqtt/dist/mqtt.min.js",
+    "https://cdn.jsdelivr.net/npm/mqtt/dist/mqtt.min.js"
   ];
+  var MQTT_BROKERS = [
+    "wss://broker.emqx.io:8084/mqtt",
+    "wss://broker.hivemq.com:8884/mqtt"
+  ];
+  var MQTT_NS = "ringfire/z3ph1rus";
   var CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  var PEER_OPTS = { host: "0.peerjs.com", port: 443, path: "/", secure: true, debug: 0 };
   var NET = {
     kind: "none", role: null, code: "",
-    peer: null, conns: [], conn: null,
-    connMap: {}, pidMap: {}
+    mqtt: null, broker: "", clientId: "",
+    connMap: {}, pidMap: {},
+    hostAlive: false, enteredLobby: false, joinTo: 0, deadTo: 0
   };
-  var HOST = { game: null, tickH: 0, lobbyH: 0, acc: 0, last: 0 };
+  var HOST = { game: null, tickH: 0, lobbyH: 0, acc: 0, last: 0, lastStatePub: 0, lastStateRaw: "" };
 
   function pagesUrl() {
     try {
@@ -2150,27 +2155,30 @@
   }
   function makeCode() {
     var s = "", i;
-    for (i = 0; i < 4; i++) s += CODE_CHARS.charAt((Math.random() * CODE_CHARS.length) | 0);
+    for (i = 0; i < 5; i++) s += CODE_CHARS.charAt((Math.random() * CODE_CHARS.length) | 0);
     return s;
   }
   function normCode(s) {
     return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
   }
-  function peerIdFor(code) { return "ringfire-" + code; }
-  function netSend(conn, obj) {
-    if (!conn || !conn.open) return;
-    try { conn.send(JSON.stringify(obj)); } catch (e) {}
+  function mqttTopic(tail) {
+    return MQTT_NS + "/" + NET.code + (tail ? "/" + tail : "");
+  }
+  function mqttMakeId() {
+    return "rf" + Math.random().toString(36).slice(2, 10);
   }
   function netParse(data) {
     if (data == null) return null;
-    if (typeof data === "string") {
-      try { return JSON.parse(data); } catch (e) { return null; }
+    if (typeof data !== "string") {
+      try { data = data.toString(); } catch (e) { return null; }
     }
-    return data;
+    if (data === "alive" || data === "dead") return data;
+    try { return JSON.parse(data); } catch (e2) { return null; }
   }
-  function gxBroadcast(obj) {
-    var i;
-    for (i = 0; i < NET.conns.length; i++) netSend(NET.conns[i], obj);
+  function mqttText(payload) {
+    if (payload == null) return "";
+    if (typeof payload === "string") return payload;
+    try { return payload.toString(); } catch (e) { return ""; }
   }
   function gxNetErr(msg) {
     var n = document.getElementById("gxNetErr");
@@ -2182,43 +2190,104 @@
     if (g) g.style.display = on ? "block" : "none";
     if (r) r.style.display = on ? "none" : "block";
   }
+  function gxShareLine() {
+    var url = pagesUrl();
+    return "Open " + url + " on EACH COMPUTER, JOIN ROOM with this code. Host tab/computer must stay open.";
+  }
   function gxPaintCode() {
     var big = document.getElementById("gxCodeBig");
     var url = document.getElementById("gxShareUrl");
     if (big) big.textContent = NET.code || (NET.kind === "lan" ? "LAN" : "————");
     if (url) {
-      if (NET.kind === "rtc" && NET.code) {
-        url.textContent = "Share " + pagesUrl() + "  ·  room " + NET.code + "  ·  two tabs = two players";
+      if (NET.kind === "mqtt" && NET.code) {
+        url.textContent = gxShareLine();
       } else if (NET.kind === "lan") {
-        url.textContent = "Share " + ((LAN_INFO && LAN_INFO.lan) || location.origin) + "  ·  this python server  ·  two tabs = two players";
+        url.textContent = "Share " + ((LAN_INFO && LAN_INFO.lan) || location.origin) + "  ·  this python server  ·  same Wi-Fi";
       }
     }
   }
-  function loadPeerJS(cb) {
-    if (typeof Peer === "function") { cb(null); return; }
+  function loadMqttJs(cb) {
+    if (typeof mqtt !== "undefined" && mqtt && typeof mqtt.connect === "function") { cb(null); return; }
     var i = 0;
     function tryNext() {
-      if (i >= PEER_CDNS.length) { cb("could not reach matchmaking — retry"); return; }
+      if (i >= MQTT_CDNS.length) { cb("could not reach matchmaking — retry"); return; }
       var s = document.createElement("script");
-      s.src = PEER_CDNS[i++];
-      s.onload = function () { if (typeof Peer === "function") cb(null); else tryNext(); };
+      s.src = MQTT_CDNS[i++];
+      s.onload = function () {
+        if (typeof mqtt !== "undefined" && mqtt && typeof mqtt.connect === "function") cb(null);
+        else tryNext();
+      };
       s.onerror = function () { tryNext(); };
       document.head.appendChild(s);
     }
     tryNext();
   }
-  function destroyPeerOnly() {
-    var i;
-    try { if (NET.conn) NET.conn.close(); } catch (e) {}
-    for (i = 0; i < NET.conns.length; i++) {
-      try { NET.conns[i].close(); } catch (e2) {}
+  function mqttEnd(publishDead) {
+    if (NET.joinTo) { clearTimeout(NET.joinTo); NET.joinTo = 0; }
+    if (NET.deadTo) { clearTimeout(NET.deadTo); NET.deadTo = 0; }
+    var c = NET.mqtt;
+    NET.mqtt = null;
+    if (!c) {
+      NET.connMap = {};
+      NET.pidMap = {};
+      return;
     }
-    try { if (NET.peer) NET.peer.destroy(); } catch (e3) {}
-    NET.peer = null;
-    NET.conn = null;
-    NET.conns = [];
+    function finish() {
+      try { c.end(true); } catch (e2) {}
+    }
+    try {
+      if (publishDead && NET.role === "host" && NET.code) {
+        c.publish(mqttTopic("host"), "dead", { qos: 1, retain: true }, function () { finish(); });
+        setTimeout(finish, 400);
+        NET.connMap = {};
+        NET.pidMap = {};
+        return;
+      }
+    } catch (e) {}
+    finish();
     NET.connMap = {};
     NET.pidMap = {};
+  }
+  function mqttPub(topic, obj, retain, qos) {
+    if (!NET.mqtt) return;
+    try {
+      var payload = typeof obj === "string" ? obj : JSON.stringify(obj);
+      NET.mqtt.publish(topic, payload, { qos: qos == null ? 0 : qos, retain: !!retain });
+    } catch (e) {}
+  }
+  function gxNetSend(obj) {
+    if (NET.kind !== "mqtt" || !NET.clientId || !NET.code) return;
+    mqttPub(mqttTopic("c/" + NET.clientId), obj, false, 1);
+  }
+  function gxCompactState(st) {
+    if (!st || typeof st !== "object") return st;
+    var out = st, k, i, p, q, pls, s;
+    if ((st.ev && st.ev.length > 6) || (st.ch && st.ch.length > 6)) {
+      out = {};
+      for (k in st) if (Object.prototype.hasOwnProperty.call(st, k)) out[k] = st[k];
+      if (st.ev && st.ev.length > 6) out.ev = st.ev.slice(-6);
+      if (st.ch && st.ch.length > 6) out.ch = st.ch.slice(-6);
+    }
+    try {
+      s = JSON.stringify(out);
+      if (s.length > 14000 && out.pl) {
+        if (out === st) {
+          out = {};
+          for (k in st) if (Object.prototype.hasOwnProperty.call(st, k)) out[k] = st[k];
+        }
+        pls = [];
+        for (i = 0; i < out.pl.length; i++) {
+          p = out.pl[i];
+          if (p && p.col) {
+            q = {};
+            for (k in p) if (Object.prototype.hasOwnProperty.call(p, k) && k !== "col") q[k] = p[k];
+            pls.push(q);
+          } else pls.push(p);
+        }
+        out.pl = pls;
+      }
+    } catch (e) {}
+    return out;
   }
   function gxCollectKeys() {
     return {
@@ -2236,92 +2305,170 @@
     };
   }
 
-  function gxCreateRoom() {
-    gxNetErr("");
-    loadPeerJS(function (err) {
-      if (err) { gxNetErr(err); return; }
-      gxTryHost(0);
-    });
-  }
-  function gxTryHost(n) {
-    if (n > 8) { gxNetErr("could not reach matchmaking — retry"); return; }
-    var code = makeCode();
-    destroyPeerOnly();
-    var peer;
-    try { peer = new Peer(peerIdFor(code), PEER_OPTS); }
-    catch (e) { gxNetErr("could not reach matchmaking — retry"); return; }
-    var settled = false;
-    var to = setTimeout(function () {
-      if (settled) return;
-      settled = true;
-      try { peer.destroy(); } catch (e2) {}
-      gxNetErr("could not reach matchmaking — retry");
-    }, 12000);
-    peer.on("open", function () {
-      if (settled) return;
-      settled = true;
-      clearTimeout(to);
-      NET.kind = "rtc";
-      NET.role = "host";
-      NET.code = code;
-      NET.peer = peer;
-      HOST.game = new GalaxySim.Game();
-      HOST.game.hostLocked = true;
-      gxBindHostPeer(peer);
-      gxShowRaceLobby();
-    });
-    peer.on("error", function (err) {
-      var t = (err && err.type) || "";
-      if (t === "unavailable-id") {
-        if (!settled) {
-          settled = true;
-          clearTimeout(to);
-          try { peer.destroy(); } catch (e3) {}
-          gxTryHost(n + 1);
-        }
+  function mqttConnectFirst(will, cb) {
+    var idx = 0;
+    function next() {
+      if (idx >= MQTT_BROKERS.length) {
+        cb("could not reach matchmaking — retry");
         return;
       }
-      if (settled) return;
-      settled = true;
-      clearTimeout(to);
-      gxNetErr("could not reach matchmaking — retry");
-    });
-  }
-  function gxBindHostPeer(peer) {
-    peer.on("connection", function (conn) {
-      conn.on("open", function () {
-        if (NET.conns.indexOf(conn) < 0) NET.conns.push(conn);
-        if (HOST.game) netSend(conn, { t: "hello", code: NET.code, url: pagesUrl(), L: HOST.game.lobbyJson() });
+      var url = MQTT_BROKERS[idx++];
+      var opts = {
+        clientId: NET.clientId,
+        clean: true,
+        connectTimeout: 7000,
+        reconnectPeriod: 0,
+        keepalive: 25,
+        protocolVersion: 4
+      };
+      if (will) opts.will = will;
+      var client;
+      try { client = mqtt.connect(url, opts); }
+      catch (e) { next(); return; }
+      var settled = false;
+      var to = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        try { client.end(true); } catch (e2) {}
+        next();
+      }, 8000);
+      client.on("connect", function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(to);
+        try { client.options.reconnectPeriod = 4000; } catch (e3) {}
+        NET.broker = url;
+        cb(null, client);
       });
-      conn.on("data", function (data) { gxHostOnData(conn, netParse(data)); });
-      conn.on("close", function () { gxHostDropConn(conn); });
-      conn.on("error", function () { gxHostDropConn(conn); });
+      client.on("error", function () {});
+      client.on("close", function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(to);
+        try { client.end(true); } catch (e4) {}
+        next();
+      });
+    }
+    next();
+  }
+  function gxBindMqtt(client) {
+    NET.mqtt = client;
+    client.on("message", function (topic, payload) {
+      gxMqttOnMessage(topic, mqttText(payload));
     });
-    peer.on("disconnected", function () {
-      try { peer.reconnect(); } catch (e) {}
+    client.on("connect", function () {
+      if (NET.role === "host" && NET.code) {
+        mqttPub(mqttTopic("host"), "alive", true, 1);
+        if (HOST.game) gxHostPushLobby();
+      }
     });
   }
-  function gxHostDropConn(conn) {
-    var i = NET.conns.indexOf(conn);
-    if (i >= 0) NET.conns.splice(i, 1);
-    var pid = conn && NET.connMap[conn.peer];
+  function gxMqttOnMessage(topic, text) {
+    if (!NET.code) return;
+    var hostT = mqttTopic("host");
+    var lobbyT = mqttTopic("lobby");
+    var stateT = mqttTopic("state");
+    var cPrefix = mqttTopic("c") + "/";
+    var gPrefix = mqttTopic("g") + "/";
+    if (topic === hostT) {
+      if (NET.role !== "guest") return;
+      if (text === "alive") {
+        NET.hostAlive = true;
+        if (NET.deadTo) { clearTimeout(NET.deadTo); NET.deadTo = 0; }
+        if (NET.joinTo) { clearTimeout(NET.joinTo); NET.joinTo = 0; }
+        if (!NET.enteredLobby) {
+          NET.enteredLobby = true;
+          gxShowRaceLobby();
+        }
+      } else if (text === "dead") {
+        if (NET.enteredLobby) {
+          NET.hostAlive = false;
+          if (NET.deadTo) clearTimeout(NET.deadTo);
+          NET.deadTo = setTimeout(function () {
+            NET.deadTo = 0;
+            if (!NET.hostAlive) gxGuestHostGone();
+          }, 2200);
+        }
+      }
+      return;
+    }
+    var msg = netParse(text);
+    if (!msg || typeof msg === "string") return;
+    if (NET.role === "host") {
+      if (topic.indexOf(cPrefix) === 0) {
+        gxHostOnData(topic.slice(cPrefix.length), msg);
+      }
+      return;
+    }
+    if (topic === lobbyT || topic === stateT || topic.indexOf(gPrefix) === 0) {
+      if (msg.t === "hello" || msg.t === "lobby" || msg.t === "state" || msg.t === "joined") {
+        if (!NET.enteredLobby && (msg.t === "hello" || msg.t === "lobby" || msg.t === "state")) {
+          NET.hostAlive = true;
+          if (NET.joinTo) { clearTimeout(NET.joinTo); NET.joinTo = 0; }
+          NET.enteredLobby = true;
+          gxShowRaceLobby();
+        }
+      }
+      gxGuestOnData(msg);
+    }
+  }
+
+  function gxCreateRoom() {
+    gxNetErr("");
+    loadMqttJs(function (err) {
+      if (err) { gxNetErr(err); return; }
+      gxTryHost();
+    });
+  }
+  function gxTryHost() {
+    mqttEnd(false);
+    var code = makeCode();
+    NET.clientId = mqttMakeId();
+    NET.code = code;
+    NET.kind = "mqtt";
+    NET.role = "host";
+    var will = { topic: mqttTopic("host"), payload: "dead", qos: 1, retain: true };
+    mqttConnectFirst(will, function (err, client) {
+      if (err) {
+        NET.kind = "none";
+        NET.role = null;
+        NET.code = "";
+        gxNetErr(typeof err === "string" ? err : "could not reach matchmaking — retry");
+        return;
+      }
+      gxBindMqtt(client);
+      client.subscribe(mqttTopic("c/+"), { qos: 1 }, function (subErr) {
+        if (subErr) {
+          gxNetErr("could not reach matchmaking — retry");
+          mqttEnd(false);
+          return;
+        }
+        HOST.game = new GalaxySim.Game();
+        HOST.game.hostLocked = true;
+        mqttPub(mqttTopic("host"), "alive", true, 1);
+        gxShowRaceLobby();
+      });
+    });
+  }
+  function gxHostDropClient(clientId) {
+    var pid = NET.connMap[clientId];
     if (pid && HOST.game) {
       HOST.game.leave(pid);
-      delete NET.connMap[conn.peer];
+      delete NET.connMap[clientId];
       delete NET.pidMap[pid];
       gxHostPushLobby();
     }
   }
-  function gxHostOnData(conn, msg) {
-    if (!msg || !HOST.game) return;
+  function gxHostOnData(clientId, msg) {
+    if (!msg || !HOST.game || !clientId) return;
     var j;
     if (msg.t === "join") {
       j = HOST.game.join(msg.name, msg.race, msg.id);
       if (j.ok) {
-        NET.connMap[conn.peer] = j.id;
-        NET.pidMap[j.id] = conn;
+        NET.connMap[clientId] = j.id;
+        NET.pidMap[j.id] = clientId;
       }
-      netSend(conn, { t: "joined", err: j.err, id: j.id, host: !!j.host });
+      mqttPub(mqttTopic("g/" + clientId), { t: "joined", err: j.err, id: j.id, host: !!j.host }, false, 1);
       gxHostPushLobby();
       return;
     }
@@ -2340,6 +2487,10 @@
     }
     if (msg.t === "leave") {
       HOST.game.leave(msg.id);
+      if (NET.connMap[clientId]) {
+        delete NET.pidMap[NET.connMap[clientId]];
+        delete NET.connMap[clientId];
+      }
       gxHostPushLobby();
     }
   }
@@ -2347,13 +2498,27 @@
     if (!HOST.game) return;
     var L = HOST.game.lobbyJson();
     GX.lobby = L;
-    gxBroadcast({ t: "lobby", L: L, code: NET.code });
+    if (NET.kind === "mqtt") {
+      mqttPub(mqttTopic("lobby"), { t: "lobby", L: L, code: NET.code }, true, 1);
+    }
     if (screen === "gxlobby") gxPaintLobby();
+  }
+  function gxHostPubState(st) {
+    if (NET.kind !== "mqtt") return;
+    var packed = gxCompactState(st);
+    var raw;
+    try { raw = JSON.stringify({ t: "state", st: packed }); }
+    catch (e) { return; }
+    if (raw === HOST.lastStateRaw && packed.p !== "O") return;
+    HOST.lastStateRaw = raw;
+    mqttPub(mqttTopic("state"), { t: "state", st: packed }, false, 0);
   }
   function gxStartHostLoops() {
     if (HOST.tickH) clearInterval(HOST.tickH);
     HOST.acc = 0;
     HOST.last = performance.now();
+    HOST.lastStatePub = 0;
+    HOST.lastStateRaw = "";
     HOST.tickH = setInterval(function () {
       if (!HOST.game || NET.role !== "host") return;
       var now = performance.now();
@@ -2380,7 +2545,10 @@
         GX.snap = st;
         GX.snapAt = nowMs();
         gxEatEvents(st);
-        gxBroadcast({ t: "state", st: st });
+        if (now - HOST.lastStatePub >= 100) {
+          HOST.lastStatePub = now;
+          gxHostPubState(st);
+        }
         if (st.p === "O") gxShowOver(st);
       }
     }, 25);
@@ -2392,67 +2560,49 @@
 
   function gxJoinRoom(code) {
     code = normCode(code);
-    if (code.length < 4) { gxNetErr("Type a 4–6 character room code."); return; }
+    if (code.length < 5) { gxNetErr("Type the 5-character room code."); return; }
     gxNetErr("");
-    loadPeerJS(function (err) {
+    loadMqttJs(function (err) {
       if (err) { gxNetErr(err); return; }
-      destroyPeerOnly();
-      var peer;
-      try { peer = new Peer(PEER_OPTS); }
-      catch (e) { gxNetErr("could not reach matchmaking — retry"); return; }
-      var settled = false;
-      var to = setTimeout(function () {
-        if (settled) return;
-        settled = true;
-        try { peer.destroy(); } catch (e2) {}
-        gxNetErr("could not reach matchmaking — retry");
-      }, 14000);
-      peer.on("open", function () {
-        var conn = peer.connect(peerIdFor(code), { reliable: true });
-        var cto = setTimeout(function () {
-          if (settled) return;
-          settled = true;
-          try { peer.destroy(); } catch (e3) {}
-          gxNetErr("no room with that code — is the host tab open?");
-        }, 9000);
-        conn.on("open", function () {
-          if (settled) return;
-          settled = true;
-          clearTimeout(to);
-          clearTimeout(cto);
-          NET.kind = "rtc";
-          NET.role = "guest";
-          NET.code = code;
-          NET.peer = peer;
-          NET.conn = conn;
-          gxShowRaceLobby();
-        });
-        conn.on("data", function (data) { gxGuestOnData(netParse(data)); });
-        conn.on("close", function () { gxGuestHostGone(); });
-        conn.on("error", function () {
-          if (!settled) {
-            settled = true;
-            clearTimeout(to);
-            clearTimeout(cto);
-            gxNetErr("no room with that code — is the host tab open?");
-          } else gxGuestHostGone();
-        });
-      });
-      peer.on("error", function (err) {
-        var t = (err && err.type) || "";
-        if (t === "peer-unavailable") {
-          if (!settled) {
-            settled = true;
-            clearTimeout(to);
-            gxNetErr("no room with that code — is the host tab open?");
-          }
+      mqttEnd(false);
+      NET.clientId = mqttMakeId();
+      NET.code = code;
+      NET.kind = "mqtt";
+      NET.role = "guest";
+      NET.hostAlive = false;
+      NET.enteredLobby = false;
+      mqttConnectFirst(null, function (err2, client) {
+        if (err2) {
+          NET.kind = "none";
+          NET.role = null;
+          NET.code = "";
+          gxNetErr(typeof err2 === "string" ? err2 : "could not reach matchmaking — retry");
           return;
         }
-        if (!settled) {
-          settled = true;
-          clearTimeout(to);
-          gxNetErr("could not reach matchmaking — retry");
-        }
+        gxBindMqtt(client);
+        var topics = [
+          mqttTopic("host"),
+          mqttTopic("lobby"),
+          mqttTopic("state"),
+          mqttTopic("g/" + NET.clientId)
+        ];
+        client.subscribe(topics, { qos: 1 }, function (subErr) {
+          if (subErr) {
+            gxNetErr("could not reach matchmaking — retry");
+            mqttEnd(false);
+            return;
+          }
+          if (NET.joinTo) clearTimeout(NET.joinTo);
+          NET.joinTo = setTimeout(function () {
+            NET.joinTo = 0;
+            if (NET.enteredLobby) return;
+            gxNetErr("no room with that code — is the host still on the page?");
+            mqttEnd(false);
+            NET.kind = "none";
+            NET.role = null;
+            NET.code = "";
+          }, 8000);
+        });
       });
     });
   }
@@ -2491,18 +2641,19 @@
     }
   }
   function gxGuestHostGone() {
-    if (NET.kind !== "rtc" || NET.role !== "guest") return;
+    if (NET.kind !== "mqtt" || NET.role !== "guest") return;
     if (GX.over && screen === "gxend") return;
     gxShowOver({ why: "HOST LEFT", reason: "HOST LEFT" });
   }
 
+
   function gxShowRaceLobby() {
     playMode = "galaxy";
     GX.over = false;
-    if (NET.kind === "rtc" && NET.role === "host") {
+    if (NET.kind === "mqtt" && NET.role === "host") {
       GX.host = true;
       gxStartHostLoops();
-      GX.lobby = HOST.game ? HOST.game.lobbyJson() : null;
+      gxHostPushLobby();
     }
     gxShowGate(false);
     gxPaintCode();
@@ -2516,7 +2667,7 @@
     } else if (NET.role === "guest") {
       if (GX.pollH) clearInterval(GX.pollH);
       GX.pollH = setInterval(function () {
-        if (NET.conn && GX.id) netSend(NET.conn, { t: "ping", id: GX.id });
+        if (GX.id) gxNetSend({ t: "ping", id: GX.id });
       }, 500);
     }
   }
@@ -2534,8 +2685,8 @@
     if (NET.role === "host" && HOST.game) {
       HOST.game.setReady(GX.id, ready);
       gxHostPushLobby();
-    } else if (NET.conn) {
-      netSend(NET.conn, { t: "ready", id: GX.id, ready: ready });
+    } else if (NET.kind === "mqtt") {
+      gxNetSend({ t: "ready", id: GX.id, ready: ready });
     }
   }
 
@@ -2546,7 +2697,7 @@
   }
   function internetNote() {
     if (el.lanNote) {
-      el.lanNote.textContent = "GALAXY: create a room or join with a code. Live: " + PAGES_URL;
+      el.lanNote.textContent = "GALAXY: two computers, same URL. CREATE ROOM / JOIN ROOM. Live: " + PAGES_URL;
       el.lanNote.classList.remove("dim");
     }
   }
@@ -2589,14 +2740,18 @@
         }).catch(function () {});
       } catch (e) {}
     }
-    if (NET.kind === "rtc" && NET.role === "guest" && NET.conn && GX.id) {
-      netSend(NET.conn, { t: "leave", id: GX.id });
+    if (NET.kind === "mqtt" && NET.role === "guest" && GX.id) {
+      gxNetSend({ t: "leave", id: GX.id });
     }
-    destroyPeerOnly();
+    mqttEnd(true);
     HOST.game = null;
     NET.kind = "none";
     NET.role = null;
     NET.code = "";
+    NET.clientId = "";
+    NET.broker = "";
+    NET.hostAlive = false;
+    NET.enteredLobby = false;
     GX.id = null;
     GX.host = false;
     GX.joined = false;
@@ -2624,7 +2779,7 @@
       gxShowRaceLobby();
       return;
     }
-    NET.kind = "rtc";
+    NET.kind = "mqtt";
     gxShowGate(true);
     gxPaintCode();
     gxNetErr("");
@@ -2669,11 +2824,11 @@
     }
     gxPaintCode();
     if (el.gxHint) {
-      if (NET.kind === "rtc" && NET.code) {
-        el.gxHint.textContent = "Room " + NET.code + "  ·  " + pagesUrl() + "  ·  host starts the match";
+      if (NET.kind === "mqtt" && NET.code) {
+        el.gxHint.textContent = "Room " + NET.code + "  ·  " + gxShareLine();
       } else {
         var url = (LAN_INFO && LAN_INFO.lan) || location.origin;
-        el.gxHint.textContent = "Share " + url + "  ·  two tabs = two players  ·  host starts the match";
+        el.gxHint.textContent = "Share " + url + "  ·  same Wi-Fi  ·  host starts the match";
       }
     }
     gxPaintRaces();
@@ -2720,9 +2875,9 @@
       afterJoin(HOST.game.join(name, GX.race, GX.id, { host: true }));
       return;
     }
-    if (NET.conn) {
+    if (NET.kind === "mqtt") {
       GX._wantReady = !!andReady;
-      netSend(NET.conn, { t: "join", name: name, race: GX.race, id: GX.id });
+      gxNetSend({ t: "join", name: name, race: GX.race, id: GX.id });
     }
   }
 
@@ -2746,14 +2901,14 @@
     GX.prev = null;
     GX.snap = st0;
     GX.snapAt = nowMs();
-    gxBroadcast({ t: "lobby", L: HOST.game.lobbyJson(), code: NET.code });
-    gxBroadcast({ t: "state", st: st0 });
+    gxHostPushLobby();
+    gxHostPubState(st0);
     gxEnterMatch();
   }
   function gxStartMatch() {
     if (NET.role === "guest") return;
     if (!GX.race) { if (el.gxHint) el.gxHint.textContent = "Pick a race first."; return; }
-    if (NET.kind === "rtc" && NET.role === "host") {
+    if (NET.kind === "mqtt" && NET.role === "host") {
       if (!GX.id) gxJoin(true);
       gxDoStart();
       return;
@@ -2841,7 +2996,7 @@
       HOST.game.applyInput(GX.id, body);
       return;
     }
-    if (NET.conn) netSend(NET.conn, { t: "input", id: body.id, seq: body.seq, keys: body.keys, chat: body.chat });
+    if (NET.kind === "mqtt") gxNetSend({ t: "input", id: body.id, seq: body.seq, keys: body.keys, chat: body.chat });
   }
 
   function gxEatEvents(st) {
@@ -2890,7 +3045,8 @@
     if (pr && pr.sh) for (i = 0; i < pr.sh.length; i++) if (pr.sh[i].id === id) a = pr.sh[i];
     if (!b) return a;
     if (!a) return b;
-    var dt = (nowMs() - GX.snapAt) / 55;
+    var span = NET.kind === "mqtt" ? 100 : 55;
+    var dt = (nowMs() - GX.snapAt) / span;
     var t = clamp(dt, 0, 1);
     return {
       id: b.id, n: b.n, r: b.r,
@@ -3367,11 +3523,11 @@
   });
 
   window.RINGFIRE = {
-    version: "2.1",
+    version: "2.2",
     getG: function () { return G; },
     newGame: newGame,
     countPlanets: function () { return G ? countPlanets(FRIEND) : 0; },
     lan: function () { return LAN_OK; },
-    net: function () { return { kind: NET.kind, role: NET.role, code: NET.code }; }
+    net: function () { return { kind: NET.kind, role: NET.role, code: NET.code, broker: NET.broker }; }
   };
 })();
