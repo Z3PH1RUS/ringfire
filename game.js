@@ -1,7 +1,7 @@
 /* RINGFIRE — original game by Caine
    Inspired by 1983 solar-system war games (Apple II) and 1973 PLATO Empire (Daleske et al.).
    Original code, original dart-class silhouette, original UI, original race names.
-   file:// plays SOL. python3 server.py serves GALAXY LAN. */
+   file:// plays SOL. GALAXY is internet rooms (PeerJS) or optional python3 server.py LAN. */
 (function () {
   "use strict";
 
@@ -1727,13 +1727,9 @@
     items[last - 2].textContent = "[ K ] SHIP COMPUTER (BUBBLE): " + (settings.bubble ? "ON" : "OFF");
     items[last - 1].textContent = "[ N ] AUDIO: " + (settings.muted ? "OFF" : "ON");
     if (el.galaxyItem) {
-      if (!LAN_OK) {
-        el.galaxyItem.textContent = "[ G ] GALAXY — RUN python3 server.py";
-        el.galaxyItem.classList.add("disabled");
-      } else {
-        el.galaxyItem.textContent = "[ G ] GALAXY — LAN WAR";
-        el.galaxyItem.classList.remove("disabled");
-      }
+      el.galaxyItem.classList.remove("disabled");
+      if (LAN_OK) el.galaxyItem.textContent = "[ G ] GALAXY — LAN (this server)";
+      else el.galaxyItem.textContent = "[ G ] GALAXY — INTERNET ROOM";
     }
     for (var i = 0; i < items.length; i++) items[i].classList.toggle("sel", i === titleSel);
   }
@@ -1774,7 +1770,7 @@
     if (act === "play") startFrom("play");
     else if (act === "same") startFrom("same");
     else if (act === "rand") startFrom("rand");
-    else if (act === "galaxy") { if (LAN_OK) gxOpenLobby(); else flashLan(); }
+    else if (act === "galaxy") gxOpenLobby();
     else if (act === "how") showScreen("how");
     else if (act === "hof") { renderHof(); showScreen("hof"); }
     else if (act === "bubble") { settings.bubble = !settings.bubble; saveSettings(); refreshTitleMenu(); }
@@ -1802,7 +1798,14 @@
     if (playMode === "galaxy" && screen === "game") { gxOnKey(e); return; }
     if (screen === "gxlobby") { gxLobbyKey(e); return; }
     if (screen === "gxend") {
-      if (k === "l") gxOpenLobby();
+      if (k === "l") {
+        GX.over = false;
+        if (NET.kind === "lan") gxShowRaceLobby();
+        else if (NET.role === "host" && HOST.game && GX.id) {
+          HOST.game.hostCmd(GX.id, "reset");
+          gxShowRaceLobby();
+        } else { gxShowGate(false); showScreen("gxlobby"); }
+      }
       if (k === "t" || k === "escape") { gxStop(); showScreen("title"); }
       return;
     }
@@ -2118,23 +2121,440 @@
     seq: 0, lobby: null, over: false
   };
 
+  var PAGES_URL = "https://z3ph1rus.github.io/ringfire/";
+  var PEER_CDNS = [
+    "https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js",
+    "https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"
+  ];
+  var CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  var PEER_OPTS = { host: "0.peerjs.com", port: 443, path: "/", secure: true, debug: 0 };
+  var NET = {
+    kind: "none", role: null, code: "",
+    peer: null, conns: [], conn: null,
+    connMap: {}, pidMap: {}
+  };
+  var HOST = { game: null, tickH: 0, lobbyH: 0, acc: 0, last: 0 };
+
+  function pagesUrl() {
+    try {
+      if (location.protocol === "http:" || location.protocol === "https:") {
+        var h = location.hostname;
+        if (h && h !== "localhost" && h !== "127.0.0.1") {
+          var path = location.pathname.replace(/index\.html$/i, "");
+          if (path.charAt(path.length - 1) !== "/") path += "/";
+          return location.origin + path;
+        }
+      }
+    } catch (e) {}
+    return PAGES_URL;
+  }
+  function makeCode() {
+    var s = "", i;
+    for (i = 0; i < 4; i++) s += CODE_CHARS.charAt((Math.random() * CODE_CHARS.length) | 0);
+    return s;
+  }
+  function normCode(s) {
+    return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+  }
+  function peerIdFor(code) { return "ringfire-" + code; }
+  function netSend(conn, obj) {
+    if (!conn || !conn.open) return;
+    try { conn.send(JSON.stringify(obj)); } catch (e) {}
+  }
+  function netParse(data) {
+    if (data == null) return null;
+    if (typeof data === "string") {
+      try { return JSON.parse(data); } catch (e) { return null; }
+    }
+    return data;
+  }
+  function gxBroadcast(obj) {
+    var i;
+    for (i = 0; i < NET.conns.length; i++) netSend(NET.conns[i], obj);
+  }
+  function gxNetErr(msg) {
+    var n = document.getElementById("gxNetErr");
+    if (n) n.textContent = msg || "";
+  }
+  function gxShowGate(on) {
+    var g = document.getElementById("gxRoomGate");
+    var r = document.getElementById("gxRaceLobby");
+    if (g) g.style.display = on ? "block" : "none";
+    if (r) r.style.display = on ? "none" : "block";
+  }
+  function gxPaintCode() {
+    var big = document.getElementById("gxCodeBig");
+    var url = document.getElementById("gxShareUrl");
+    if (big) big.textContent = NET.code || (NET.kind === "lan" ? "LAN" : "————");
+    if (url) {
+      if (NET.kind === "rtc" && NET.code) {
+        url.textContent = "Share " + pagesUrl() + "  ·  room " + NET.code + "  ·  two tabs = two players";
+      } else if (NET.kind === "lan") {
+        url.textContent = "Share " + ((LAN_INFO && LAN_INFO.lan) || location.origin) + "  ·  this python server  ·  two tabs = two players";
+      }
+    }
+  }
+  function loadPeerJS(cb) {
+    if (typeof Peer === "function") { cb(null); return; }
+    var i = 0;
+    function tryNext() {
+      if (i >= PEER_CDNS.length) { cb("could not reach matchmaking — retry"); return; }
+      var s = document.createElement("script");
+      s.src = PEER_CDNS[i++];
+      s.onload = function () { if (typeof Peer === "function") cb(null); else tryNext(); };
+      s.onerror = function () { tryNext(); };
+      document.head.appendChild(s);
+    }
+    tryNext();
+  }
+  function destroyPeerOnly() {
+    var i;
+    try { if (NET.conn) NET.conn.close(); } catch (e) {}
+    for (i = 0; i < NET.conns.length; i++) {
+      try { NET.conns[i].close(); } catch (e2) {}
+    }
+    try { if (NET.peer) NET.peer.destroy(); } catch (e3) {}
+    NET.peer = null;
+    NET.conn = null;
+    NET.conns = [];
+    NET.connMap = {};
+    NET.pidMap = {};
+  }
+  function gxCollectKeys() {
+    return {
+      l: keys.arrowleft || keys.a ? 1 : 0,
+      r: keys.arrowright || keys.d ? 1 : 0,
+      sp: keys.space ? 1 : 0,
+      f: (keys.f || keys.c || pointer.right) ? 1 : 0,
+      x: (keys.x || keys.g) ? 1 : 0,
+      h: keys.h ? 1 : 0,
+      b: keys.b ? 1 : 0,
+      s: keys.s ? 1 : 0,
+      u: keys.u ? 1 : 0,
+      rp: keys.r ? 1 : 0,
+      w: GX.warp
+    };
+  }
+
+  function gxCreateRoom() {
+    gxNetErr("");
+    loadPeerJS(function (err) {
+      if (err) { gxNetErr(err); return; }
+      gxTryHost(0);
+    });
+  }
+  function gxTryHost(n) {
+    if (n > 8) { gxNetErr("could not reach matchmaking — retry"); return; }
+    var code = makeCode();
+    destroyPeerOnly();
+    var peer;
+    try { peer = new Peer(peerIdFor(code), PEER_OPTS); }
+    catch (e) { gxNetErr("could not reach matchmaking — retry"); return; }
+    var settled = false;
+    var to = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      try { peer.destroy(); } catch (e2) {}
+      gxNetErr("could not reach matchmaking — retry");
+    }, 12000);
+    peer.on("open", function () {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      NET.kind = "rtc";
+      NET.role = "host";
+      NET.code = code;
+      NET.peer = peer;
+      HOST.game = new GalaxySim.Game();
+      HOST.game.hostLocked = true;
+      gxBindHostPeer(peer);
+      gxShowRaceLobby();
+    });
+    peer.on("error", function (err) {
+      var t = (err && err.type) || "";
+      if (t === "unavailable-id") {
+        if (!settled) {
+          settled = true;
+          clearTimeout(to);
+          try { peer.destroy(); } catch (e3) {}
+          gxTryHost(n + 1);
+        }
+        return;
+      }
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      gxNetErr("could not reach matchmaking — retry");
+    });
+  }
+  function gxBindHostPeer(peer) {
+    peer.on("connection", function (conn) {
+      conn.on("open", function () {
+        if (NET.conns.indexOf(conn) < 0) NET.conns.push(conn);
+        if (HOST.game) netSend(conn, { t: "hello", code: NET.code, url: pagesUrl(), L: HOST.game.lobbyJson() });
+      });
+      conn.on("data", function (data) { gxHostOnData(conn, netParse(data)); });
+      conn.on("close", function () { gxHostDropConn(conn); });
+      conn.on("error", function () { gxHostDropConn(conn); });
+    });
+    peer.on("disconnected", function () {
+      try { peer.reconnect(); } catch (e) {}
+    });
+  }
+  function gxHostDropConn(conn) {
+    var i = NET.conns.indexOf(conn);
+    if (i >= 0) NET.conns.splice(i, 1);
+    var pid = conn && NET.connMap[conn.peer];
+    if (pid && HOST.game) {
+      HOST.game.leave(pid);
+      delete NET.connMap[conn.peer];
+      delete NET.pidMap[pid];
+      gxHostPushLobby();
+    }
+  }
+  function gxHostOnData(conn, msg) {
+    if (!msg || !HOST.game) return;
+    var j;
+    if (msg.t === "join") {
+      j = HOST.game.join(msg.name, msg.race, msg.id);
+      if (j.ok) {
+        NET.connMap[conn.peer] = j.id;
+        NET.pidMap[j.id] = conn;
+      }
+      netSend(conn, { t: "joined", err: j.err, id: j.id, host: !!j.host });
+      gxHostPushLobby();
+      return;
+    }
+    if (msg.t === "ready") {
+      HOST.game.setReady(msg.id, msg.ready !== false);
+      gxHostPushLobby();
+      return;
+    }
+    if (msg.t === "input") {
+      HOST.game.applyInput(msg.id, msg);
+      return;
+    }
+    if (msg.t === "ping") {
+      if (msg.id) HOST.game.touch(msg.id);
+      return;
+    }
+    if (msg.t === "leave") {
+      HOST.game.leave(msg.id);
+      gxHostPushLobby();
+    }
+  }
+  function gxHostPushLobby() {
+    if (!HOST.game) return;
+    var L = HOST.game.lobbyJson();
+    GX.lobby = L;
+    gxBroadcast({ t: "lobby", L: L, code: NET.code });
+    if (screen === "gxlobby") gxPaintLobby();
+  }
+  function gxStartHostLoops() {
+    if (HOST.tickH) clearInterval(HOST.tickH);
+    HOST.acc = 0;
+    HOST.last = performance.now();
+    HOST.tickH = setInterval(function () {
+      if (!HOST.game || NET.role !== "host") return;
+      var now = performance.now();
+      HOST.acc += (now - HOST.last) / 1000;
+      HOST.last = now;
+      if (HOST.acc > 0.25) HOST.acc = GalaxySim.DT;
+      if (HOST.game.phase === "play" && GX.id && !GX.over) {
+        GX.seq++;
+        var body = { id: GX.id, seq: GX.seq, keys: gxCollectKeys() };
+        if (GX.pendingChat) { body.chat = GX.pendingChat; GX.pendingChat = ""; }
+        HOST.game.applyInput(GX.id, body);
+      } else if (HOST.game.phase === "play" && GX.id) {
+        HOST.game.touch(GX.id);
+      }
+      var n = 0;
+      while (HOST.acc >= GalaxySim.DT && n < 3) {
+        HOST.game.tick();
+        HOST.acc -= GalaxySim.DT;
+        n++;
+      }
+      if (HOST.game.phase === "play" || HOST.game.phase === "over") {
+        var st = HOST.game.stateJson(GX.id);
+        GX.prev = GX.snap;
+        GX.snap = st;
+        GX.snapAt = nowMs();
+        gxEatEvents(st);
+        gxBroadcast({ t: "state", st: st });
+        if (st.p === "O") gxShowOver(st);
+      }
+    }, 25);
+    if (HOST.lobbyH) clearInterval(HOST.lobbyH);
+    HOST.lobbyH = setInterval(function () {
+      if (HOST.game && HOST.game.phase === "lobby") gxHostPushLobby();
+    }, 500);
+  }
+
+  function gxJoinRoom(code) {
+    code = normCode(code);
+    if (code.length < 4) { gxNetErr("Type a 4–6 character room code."); return; }
+    gxNetErr("");
+    loadPeerJS(function (err) {
+      if (err) { gxNetErr(err); return; }
+      destroyPeerOnly();
+      var peer;
+      try { peer = new Peer(PEER_OPTS); }
+      catch (e) { gxNetErr("could not reach matchmaking — retry"); return; }
+      var settled = false;
+      var to = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        try { peer.destroy(); } catch (e2) {}
+        gxNetErr("could not reach matchmaking — retry");
+      }, 14000);
+      peer.on("open", function () {
+        var conn = peer.connect(peerIdFor(code), { reliable: true });
+        var cto = setTimeout(function () {
+          if (settled) return;
+          settled = true;
+          try { peer.destroy(); } catch (e3) {}
+          gxNetErr("no room with that code — is the host tab open?");
+        }, 9000);
+        conn.on("open", function () {
+          if (settled) return;
+          settled = true;
+          clearTimeout(to);
+          clearTimeout(cto);
+          NET.kind = "rtc";
+          NET.role = "guest";
+          NET.code = code;
+          NET.peer = peer;
+          NET.conn = conn;
+          gxShowRaceLobby();
+        });
+        conn.on("data", function (data) { gxGuestOnData(netParse(data)); });
+        conn.on("close", function () { gxGuestHostGone(); });
+        conn.on("error", function () {
+          if (!settled) {
+            settled = true;
+            clearTimeout(to);
+            clearTimeout(cto);
+            gxNetErr("no room with that code — is the host tab open?");
+          } else gxGuestHostGone();
+        });
+      });
+      peer.on("error", function (err) {
+        var t = (err && err.type) || "";
+        if (t === "peer-unavailable") {
+          if (!settled) {
+            settled = true;
+            clearTimeout(to);
+            gxNetErr("no room with that code — is the host tab open?");
+          }
+          return;
+        }
+        if (!settled) {
+          settled = true;
+          clearTimeout(to);
+          gxNetErr("could not reach matchmaking — retry");
+        }
+      });
+    });
+  }
+  function gxGuestOnData(msg) {
+    if (!msg) return;
+    if (msg.t === "hello" || msg.t === "lobby") {
+      if (msg.code) NET.code = msg.code;
+      GX.lobby = msg.L;
+      gxPaintCode();
+      if (screen === "gxlobby") gxPaintLobby();
+      if (msg.L && msg.L.phase === "play") gxEnterMatch();
+      if (msg.L && msg.L.phase === "over") gxShowOver(msg.L);
+      return;
+    }
+    if (msg.t === "joined") {
+      if (msg.err) { if (el.gxHint) el.gxHint.textContent = msg.err; return; }
+      GX.id = msg.id;
+      GX.host = !!msg.host;
+      GX.joined = true;
+      if (GX._wantReady) { GX._wantReady = false; gxSendReady(true); }
+      return;
+    }
+    if (msg.t === "state") {
+      var st = msg.st;
+      if (!st) return;
+      if (st.p === "L" || st.phase === "lobby") {
+        if (screen === "game") { GX.over = false; showScreen("gxlobby"); gxShowGate(false); }
+        return;
+      }
+      if (screen !== "game" && st.p === "P") gxEnterMatch();
+      GX.prev = GX.snap;
+      GX.snap = st;
+      GX.snapAt = nowMs();
+      gxEatEvents(st);
+      if (st.p === "O") gxShowOver(st);
+    }
+  }
+  function gxGuestHostGone() {
+    if (NET.kind !== "rtc" || NET.role !== "guest") return;
+    if (GX.over && screen === "gxend") return;
+    gxShowOver({ why: "HOST LEFT", reason: "HOST LEFT" });
+  }
+
+  function gxShowRaceLobby() {
+    playMode = "galaxy";
+    GX.over = false;
+    if (NET.kind === "rtc" && NET.role === "host") {
+      GX.host = true;
+      gxStartHostLoops();
+      GX.lobby = HOST.game ? HOST.game.lobbyJson() : null;
+    }
+    gxShowGate(false);
+    gxPaintCode();
+    gxPaintRaces();
+    gxPaintLobby();
+    showScreen("gxlobby");
+    if (NET.kind === "lan") {
+      if (GX.pollH) clearInterval(GX.pollH);
+      GX.pollH = setInterval(gxPollLobby, 500);
+      gxPollLobby();
+    } else if (NET.role === "guest") {
+      if (GX.pollH) clearInterval(GX.pollH);
+      GX.pollH = setInterval(function () {
+        if (NET.conn && GX.id) netSend(NET.conn, { t: "ping", id: GX.id });
+      }, 500);
+    }
+  }
+  function gxSendReady(ready) {
+    GX.ready = !!ready;
+    gxPaintRaces();
+    if (NET.kind === "lan") {
+      fetch("/api/ready", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: GX.id, ready: ready })
+      }).then(function () { gxPollLobby(); }).catch(function () {});
+      return;
+    }
+    if (NET.role === "host" && HOST.game) {
+      HOST.game.setReady(GX.id, ready);
+      gxHostPushLobby();
+    } else if (NET.conn) {
+      netSend(NET.conn, { t: "ready", id: GX.id, ready: ready });
+    }
+  }
+
+
   function raceCol(o) {
     if (!o || o === "N" || o === "gun") return "#8aa08a";
     return (RACE[o] && RACE[o].color) || "#aaa";
   }
-  function flashLan() {
+  function internetNote() {
     if (el.lanNote) {
-      el.lanNote.textContent = "For LAN: run python3 server.py  then open the printed URL (not this file).";
+      el.lanNote.textContent = "GALAXY: create a room or join with a code. Live: " + PAGES_URL;
       el.lanNote.classList.remove("dim");
     }
   }
+  function flashLan() { internetNote(); }
   function probeLan() {
     LAN_OK = false;
     if (location.protocol !== "http:" && location.protocol !== "https:") {
-      if (el.lanNote) {
-        el.lanNote.textContent = "For LAN: run python3 server.py";
-        el.lanNote.className = "dim";
-      }
+      internetNote();
       refreshTitleMenu();
       return;
     }
@@ -2143,16 +2563,13 @@
         LAN_OK = true;
         LAN_INFO = info;
         if (el.lanNote) {
-          el.lanNote.textContent = "Share this on your Wi-Fi: " + (info.lan || location.origin);
+          el.lanNote.textContent = "LAN server on this origin. Share " + (info.lan || location.origin) + "  ·  or use an internet room on " + PAGES_URL;
           el.lanNote.classList.remove("dim");
         }
-      } else flashLan();
+      } else internetNote();
       refreshTitleMenu();
     }).catch(function () {
-      if (el.lanNote) {
-        el.lanNote.textContent = "For LAN: run python3 server.py  (this HTTP server is not RINGFIRE)";
-        el.lanNote.className = "dim";
-      }
+      internetNote();
       refreshTitleMenu();
     });
   }
@@ -2160,11 +2577,34 @@
   function gxStop() {
     if (GX.pollH) { clearInterval(GX.pollH); GX.pollH = 0; }
     if (GX.inH) { clearInterval(GX.inH); GX.inH = 0; }
+    if (HOST.tickH) { clearInterval(HOST.tickH); HOST.tickH = 0; }
+    if (HOST.lobbyH) { clearInterval(HOST.lobbyH); HOST.lobbyH = 0; }
+    if (NET.kind === "lan" && GX.id) {
+      try {
+        fetch("/api/leave", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: GX.id }),
+          keepalive: true
+        }).catch(function () {});
+      } catch (e) {}
+    }
+    if (NET.kind === "rtc" && NET.role === "guest" && NET.conn && GX.id) {
+      netSend(NET.conn, { t: "leave", id: GX.id });
+    }
+    destroyPeerOnly();
+    HOST.game = null;
+    NET.kind = "none";
+    NET.role = null;
+    NET.code = "";
+    GX.id = null;
+    GX.host = false;
+    GX.joined = false;
+    GX.ready = false;
     playMode = "sol";
   }
 
   function gxOpenLobby() {
-    if (!LAN_OK) { flashLan(); return; }
     audio.resume();
     playMode = "galaxy";
     GX.ready = false;
@@ -2173,13 +2613,22 @@
     GX.snap = null;
     GX.lobby = null;
     GX.banner = "";
+    GX.id = null;
+    GX.host = false;
     if (el.gName && !el.gName.value) el.gName.value = GX.name || "";
     gxPaintRaces();
-    gxPaintLobby();
+    if (LAN_OK) {
+      NET.kind = "lan";
+      NET.role = null;
+      NET.code = "";
+      gxShowRaceLobby();
+      return;
+    }
+    NET.kind = "rtc";
+    gxShowGate(true);
+    gxPaintCode();
+    gxNetErr("");
     showScreen("gxlobby");
-    if (GX.pollH) clearInterval(GX.pollH);
-    GX.pollH = setInterval(gxPollLobby, 500);
-    gxPollLobby();
   }
 
   function gxPaintRaces() {
@@ -2210,7 +2659,7 @@
       }
     }
     if (el.plist) el.plist.innerHTML = html;
-    var meHost = !!(L && L.hostId && L.hostId === GX.id) || GX.host;
+    var meHost = !!(L && L.hostId && L.hostId === GX.id) || GX.host || NET.role === "host";
     if (el.hostStart) el.hostStart.style.opacity = meHost ? "1" : "0.35";
     if (el.fillAI) {
       el.fillAI.disabled = !meHost;
@@ -2218,9 +2667,14 @@
         el.fillAI.checked = L.fillAI;
       }
     }
+    gxPaintCode();
     if (el.gxHint) {
-      var url = (LAN_INFO && LAN_INFO.lan) || location.origin;
-      el.gxHint.textContent = "Share " + url + "  ·  two tabs = two players  ·  host starts the match";
+      if (NET.kind === "rtc" && NET.code) {
+        el.gxHint.textContent = "Room " + NET.code + "  ·  " + pagesUrl() + "  ·  host starts the match";
+      } else {
+        var url = (LAN_INFO && LAN_INFO.lan) || location.origin;
+        el.gxHint.textContent = "Share " + url + "  ·  two tabs = two players  ·  host starts the match";
+      }
     }
     gxPaintRaces();
     if (L && L.phase === "play") gxEnterMatch();
@@ -2243,43 +2697,67 @@
       if (el.gxHint) el.gxHint.textContent = "Pick a race before ready. Helios, Veil, Spark, or Mandate.";
       return;
     }
-    fetch("/api/join", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name, race: GX.race, id: GX.id })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j.err) { if (el.gxHint) el.gxHint.textContent = j.err; return; }
+    function afterJoin(j) {
+      if (!j || j.err) { if (el.gxHint) el.gxHint.textContent = (j && j.err) || "join failed"; return; }
       GX.id = j.id;
       GX.host = !!j.host;
       GX.joined = true;
-      if (andReady) {
-        return fetch("/api/ready", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: GX.id, ready: true })
-        }).then(function (r) { return r.json(); }).then(function () {
-          GX.ready = true;
-          gxPollLobby();
-        });
-      }
-      gxPollLobby();
-    }).catch(function () {
-      if (el.gxHint) el.gxHint.textContent = "Join failed — is server.py running?";
-    });
+      if (andReady) gxSendReady(true);
+      else if (NET.kind === "lan") gxPollLobby();
+      else if (NET.role === "host") gxHostPushLobby();
+    }
+    if (NET.kind === "lan") {
+      fetch("/api/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name, race: GX.race, id: GX.id })
+      }).then(function (r) { return r.json(); }).then(afterJoin).catch(function () {
+        if (el.gxHint) el.gxHint.textContent = "Join failed — is server.py running?";
+      });
+      return;
+    }
+    if (NET.role === "host" && HOST.game) {
+      afterJoin(HOST.game.join(name, GX.race, GX.id, { host: true }));
+      return;
+    }
+    if (NET.conn) {
+      GX._wantReady = !!andReady;
+      netSend(NET.conn, { t: "join", name: name, race: GX.race, id: GX.id });
+    }
   }
 
   function gxDoStart() {
-    fetch("/api/host", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: GX.id, op: "start", fillAI: !!(el.fillAI && el.fillAI.checked) })
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      if (j.err) { if (el.gxHint) el.gxHint.textContent = j.err; return; }
-      gxEnterMatch();
-    }).catch(function () {});
+    var fill = !!(el.fillAI && el.fillAI.checked);
+    if (NET.kind === "lan") {
+      fetch("/api/host", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: GX.id, op: "start", fillAI: fill })
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        if (j.err) { if (el.gxHint) el.gxHint.textContent = j.err; return; }
+        gxEnterMatch();
+      }).catch(function () {});
+      return;
+    }
+    if (NET.role !== "host" || !HOST.game || !GX.id) return;
+    var j = HOST.game.hostCmd(GX.id, "start", fill);
+    if (j.err) { if (el.gxHint) el.gxHint.textContent = j.err; return; }
+    var st0 = HOST.game.stateJson(GX.id);
+    GX.prev = null;
+    GX.snap = st0;
+    GX.snapAt = nowMs();
+    gxBroadcast({ t: "lobby", L: HOST.game.lobbyJson(), code: NET.code });
+    gxBroadcast({ t: "state", st: st0 });
+    gxEnterMatch();
   }
   function gxStartMatch() {
+    if (NET.role === "guest") return;
     if (!GX.race) { if (el.gxHint) el.gxHint.textContent = "Pick a race first."; return; }
+    if (NET.kind === "rtc" && NET.role === "host") {
+      if (!GX.id) gxJoin(true);
+      gxDoStart();
+      return;
+    }
     if (!GX.id) {
       var name = (el.gName && el.gName.value) || GX.name || "ANON";
       GX.name = name;
@@ -2302,6 +2780,7 @@
   }
 
   function gxEnterMatch() {
+    if (screen === "game" && playMode === "galaxy") return;
     playMode = "galaxy";
     GX.over = false;
     GX.mapOpen = false;
@@ -2310,15 +2789,21 @@
     GX.fx = [];
     GX.lastEv = 0;
     GX.warp = 0;
-    if (GX.pollH) { clearInterval(GX.pollH); GX.pollH = 0; }
+    if (GX.pollH && NET.kind === "lan") { clearInterval(GX.pollH); GX.pollH = 0; }
     showScreen("game");
     resize();
     if (el.chatlog) el.chatlog.textContent = "";
     GX.banner = "GALAXY LIVE — TAKE ALL 25";
     GX.bannerT = 4;
-    GX.pollH = setInterval(gxPollState, 55);
-    GX.inH = setInterval(gxPostInput, 55);
-    gxPollState();
+    if (GX.inH) { clearInterval(GX.inH); GX.inH = 0; }
+    if (NET.kind === "lan") {
+      if (GX.pollH) clearInterval(GX.pollH);
+      GX.pollH = setInterval(gxPollState, 55);
+      GX.inH = setInterval(gxPostInput, 55);
+      gxPollState();
+    } else if (NET.role === "guest") {
+      GX.inH = setInterval(gxPostInput, 55);
+    }
   }
 
   function gxPollState() {
@@ -2337,36 +2822,26 @@
   }
 
   function gxPostInput() {
-    if (!GX.id || GX.over || GX.chatting) {
-      if (!GX.id || GX.over) return;
-    }
+    if (!GX.id || GX.over) return;
     GX.seq++;
-    var body = {
-      id: GX.id,
-      seq: GX.seq,
-      keys: {
-        l: keys.arrowleft || keys.a ? 1 : 0,
-        r: keys.arrowright || keys.d ? 1 : 0,
-        sp: keys.space ? 1 : 0,
-        f: (keys.f || keys.c || pointer.right) ? 1 : 0,
-        x: (keys.x || keys.g) ? 1 : 0,
-        h: keys.h ? 1 : 0,
-        b: keys.b ? 1 : 0,
-        s: keys.s ? 1 : 0,
-        u: keys.u ? 1 : 0,
-        rp: keys.r ? 1 : 0,
-        w: GX.warp
-      }
-    };
+    var body = { id: GX.id, seq: GX.seq, keys: gxCollectKeys() };
     if (GX.pendingChat) {
       body.chat = GX.pendingChat;
       GX.pendingChat = "";
     }
-    fetch("/api/input", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    }).catch(function () {});
+    if (NET.kind === "lan") {
+      fetch("/api/input", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      }).catch(function () {});
+      return;
+    }
+    if (NET.role === "host" && HOST.game) {
+      HOST.game.applyInput(GX.id, body);
+      return;
+    }
+    if (NET.conn) netSend(NET.conn, { t: "input", id: body.id, seq: body.seq, keys: body.keys, chat: body.chat });
   }
 
   function gxEatEvents(st) {
@@ -2471,9 +2946,19 @@
 
   function gxLobbyKey(e) {
     var k = keyName(e);
+    var gate = document.getElementById("gxRoomGate");
+    var gateOn = gate && gate.style.display !== "none";
     if (k === "escape") { gxStop(); showScreen("title"); return true; }
+    if (gateOn) {
+      if (k === "c") gxCreateRoom();
+      if (k === "j") {
+        var inp = document.getElementById("gxJoinCode");
+        gxJoinRoom(inp ? inp.value : "");
+      }
+      return true;
+    }
     if (k === "enter") { gxJoin(true); return true; }
-    if (k === "l" && GX.host) { gxStartMatch(); return true; }
+    if (k === "l" && (GX.host || NET.role === "host")) { gxStartMatch(); return true; }
     if (k === "1") gxPick("helios");
     if (k === "2") gxPick("veil");
     if (k === "3") gxPick("spark");
@@ -2794,13 +3279,34 @@
     }
     if (el.readyBtn) el.readyBtn.addEventListener("click", function () { gxJoin(true); });
     if (el.hostStart) el.hostStart.addEventListener("click", function () { gxStartMatch(); });
+    var gxCreate = document.getElementById("gxCreate");
+    var gxJoinBtn = document.getElementById("gxJoinBtn");
+    var gxJoinCode = document.getElementById("gxJoinCode");
+    if (gxCreate) gxCreate.addEventListener("click", function () { gxCreateRoom(); });
+    if (gxJoinBtn) gxJoinBtn.addEventListener("click", function () {
+      gxJoinRoom(gxJoinCode ? gxJoinCode.value : "");
+    });
+    if (gxJoinCode) {
+      gxJoinCode.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); gxJoinRoom(gxJoinCode.value); }
+        e.stopPropagation();
+      });
+    }
     if (el.fillAI) el.fillAI.addEventListener("change", function () {
-      if (!GX.id || !GX.host) return;
-      fetch("/api/host", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: GX.id, op: "fill", fillAI: !!el.fillAI.checked })
-      }).catch(function () {});
+      if (!(GX.host || NET.role === "host")) return;
+      if (NET.kind === "lan") {
+        if (!GX.id) return;
+        fetch("/api/host", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: GX.id, op: "fill", fillAI: !!el.fillAI.checked })
+        }).catch(function () {});
+        return;
+      }
+      if (HOST.game && GX.id) {
+        HOST.game.hostCmd(GX.id, "fill", !!el.fillAI.checked);
+        gxHostPushLobby();
+      }
     });
     if (el.gxend) {
       el.gxend.addEventListener("click", function (e) {
@@ -2808,12 +3314,23 @@
         if (!li) return;
         var act = li.getAttribute("data-act");
         if (act === "gxlobby") {
-          fetch("/api/host", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: GX.id, op: "reset" })
-          }).catch(function () {});
-          gxOpenLobby();
+          GX.over = false;
+          if (NET.kind === "lan") {
+            fetch("/api/host", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: GX.id, op: "reset" })
+            }).catch(function () {});
+            gxShowRaceLobby();
+            return;
+          }
+          if (NET.role === "host" && HOST.game && GX.id) {
+            HOST.game.hostCmd(GX.id, "reset");
+            gxShowRaceLobby();
+            return;
+          }
+          gxShowGate(false);
+          showScreen("gxlobby");
         }
         if (act === "title") { gxStop(); showScreen("title"); }
       });
@@ -2845,11 +3362,16 @@
     }
   } catch (e) {}
 
+  window.addEventListener("beforeunload", function () {
+    if (playMode === "galaxy") gxStop();
+  });
+
   window.RINGFIRE = {
-    version: "2.0",
+    version: "2.1",
     getG: function () { return G; },
     newGame: newGame,
     countPlanets: function () { return G ? countPlanets(FRIEND) : 0; },
-    lan: function () { return LAN_OK; }
+    lan: function () { return LAN_OK; },
+    net: function () { return { kind: NET.kind, role: NET.role, code: NET.code }; }
   };
 })();

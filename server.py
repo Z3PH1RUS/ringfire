@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-# RINGFIRE GALAXY — host-authoritative LAN server
+# RINGFIRE GALAXY — optional LAN fallback (host-authoritative HTTP)
+# Default multiplayer is internet rooms on GitHub Pages (PeerJS, no python).
 # Python 3 stdlib only. Inspired by 1973 PLATO Empire (Daleske et al.)
 # Original names, map dressing, and code. No copied assets.
-"""RINGFIRE GALAXY host.
+"""RINGFIRE GALAXY LAN host (optional).
 
-Share this on your Wi-Fi after it prints the URL.
-Two browser tabs on localhost = two players.
+Internet rooms: https://z3ph1rus.github.io/ringfire/  (CREATE ROOM / JOIN ROOM).
+This process is only for same-Wi-Fi play without the public broker.
+Share the printed URL after it binds. Two browser tabs on localhost = two players.
 """
 from __future__ import annotations
 

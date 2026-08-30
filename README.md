@@ -4,41 +4,42 @@
 Two modes, one dart.
 
 - **SOL** — one player vs Mandate AI in a compact solar system. Open `index.html` (no server).
-- **GALAXY** — same-Wi-Fi team war. 25 planets, four races, host-authoritative. Run `python3 server.py`.
+- **GALAXY** — internet team war. 25 planets, four races, host-authoritative rooms. Play at https://z3ph1rus.github.io/ringfire/
 
 Inspired by 1973 PLATO Empire (John Daleske et al.) and 1983 Apple II solar-system war games. Original names, art, and code — not a clone of any commercial title, disk, or asset.
 
 Silas Warner (later of Muse Software) helped with disk space on Empire I. Mentioned here only; nothing from Muse, Empire, Titan Empire, or Star Trek was copied.
 
 ## Run SOL
-Open `index.html` in a browser. No server, no install, no network. Hall of fame stays local (`localStorage`).
+Open `index.html` in a browser, or the live page. No server, no install, no network. Hall of fame stays local (`localStorage`).
 
-If you opened the file directly you will see: **For LAN: run python3 server.py**.
+Live: **https://z3ph1rus.github.io/ringfire/**
 
-## Run GALAXY (same Wi-Fi)
-On the host machine:
+## Run GALAXY (internet rooms)
+Open **https://z3ph1rus.github.io/ringfire/** (or this same `index.html` from GitHub Pages / any static HTTP host).
+
+1. Title → **GALAXY — INTERNET ROOM**.
+2. One player **CREATE ROOM**. A 4-character code is shown large, plus the Pages URL. That tab is the host — it runs the simulation.
+3. Everyone else **JOIN ROOM** and types the code.
+4. Pick a race (required). Same race = teammates. **READY**. Host **START MATCH**. Optional **FILL EMPTY RACES WITH AI**. Cap 12.
+
+**Two-tab test on the live URL:** open https://z3ph1rus.github.io/ringfire/ twice. Tab A: CREATE ROOM, copy the code, pick Helios, Ready. Tab B: JOIN ROOM, type the code, pick Spark, Ready. Tab A starts. Fly toward each other (~20–40s at cruise from a home cluster to a neighbor). Capture a neutral on the edge: bomb, detonate (`X`), beam down (`B`).
+
+Rooms use the public PeerJS broker (`0.peerjs.com`) and WebRTC data channels. No API keys, no python, no LAN IP, no port 7474. Closing the host tab ends the match.
+
+If the lobby says **could not reach matchmaking — retry**, the broker or CDN was blocked — try again, or another network.
+
+Symmetric NATs / some campus firewalls need a TURN server we do not run; those peers may fail to connect even when the room code is correct.
+
+## Optional: GALAXY on a LAN (python fallback)
+Only if you want same-Wi-Fi play without the public broker:
 
 ```
 cd ringfire
 python3 server.py
 ```
 
-Python 3 standard library only (no pip, no npm). The server binds `0.0.0.0:7474` (or the next free port) and prints:
-
-```
-Share this on your Wi-Fi: http://x.x.x.x:7474
-Local test:              http://127.0.0.1:7474
-```
-
-Everyone on the **same network** opens that printed URL. Join is just opening the page; race select is the first GALAXY screen.
-
-**Two-tab localhost test:** open `http://127.0.0.1:7474` twice. Tab A picks Helios and Ready. Tab B picks Spark and Ready. Tab A (host) starts. Fly toward each other (~20–40s at cruise from a home cluster to a neighbor). Capture a neutral on the edge: bomb, detonate (`X`), beam down (`B`).
-
-Firewall: allow inbound TCP 7474 (or the port it printed) on the host. Phones/laptops must be on the same LAN, not guest isolation Wi-Fi.
-
-Cap 12 players. Host checkbox **FILL EMPTY RACES WITH AI** puts a SOL-style skirmish ship on each unpicked team (use this if you are alone and want a fight). Default LAN: only human races that were picked, plus neutrals.
-
-Host quitting (or leaving the URL) ends the match.
+Python 3 standard library only (no pip, no npm). The server binds `0.0.0.0:7474` (or the next free port) and prints a Wi-Fi URL. Everyone on that network opens it; race select is the first GALAXY screen (no room code). Internet rooms stay the default on GitHub Pages and any origin that is not this python server.
 
 ## Races (GALAXY — pick one before spawn)
 It is a **team**. Several humans may share a race.
@@ -74,7 +75,7 @@ One ship, nine planets, moving moons, and a clock. The Mandate holds Titan. Reta
 
 SOL: the Mandate also invades. You lose when no friendly planets remain. Win: all nine planets friendly. Fastest time → hall of fame.
 
-GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short LAN chat.
+GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short room chat.
 
 ## Controls
 | Key | Action |
@@ -93,7 +94,7 @@ GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short LAN chat.
 | `R` | Repair hull (friendly orbit, costs fuel) |
 | `[` `]` or `,` `.` | Radar zoom |
 | `M` | Strategic map (SOL: action slows; GALAXY: everyone keeps moving) |
-| `Enter` | LAN chat (GALAXY) |
+| `Enter` | Room chat (GALAXY) |
 | Click | Lock planetary info sheet |
 | `L` | Clear target lock |
 | `P` / `ESC` | Pause (**SOL**) |

@@ -338,6 +338,40 @@
     line-height: 1.45;
   }
   #lanNote.dim { color: var(--crt-dim); }
+  #gxCodeBig {
+    font-size: clamp(32px, 8vw, 58px);
+    letter-spacing: 0.35em;
+    color: var(--amber);
+    text-shadow: 0 0 14px rgba(255, 180, 40, 0.45);
+    margin: 4px 0 8px;
+    font-weight: normal;
+  }
+  #gxJoinCode {
+    background: #031003;
+    border: 1px solid var(--crt);
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 22px;
+    letter-spacing: 0.28em;
+    padding: 6px 8px;
+    outline: none;
+    width: 220px;
+    text-transform: uppercase;
+  }
+  #gxNetErr {
+    color: var(--alert);
+    font-size: 13px;
+    min-height: 1.4em;
+    margin-top: 12px;
+    max-width: 70ch;
+  }
+  #gxShareUrl { margin-top: 4px; }
+  .room-kicker {
+    color: var(--amber);
+    letter-spacing: 0.28em;
+    font-size: 12px;
+    margin-top: 4px;
+  }
   .menu li.disabled { color: #3a5a3a; cursor: default; }
   .menu li.disabled:hover { background: none; color: #3a5a3a; }
 
@@ -441,18 +475,19 @@
       <li data-act="play" class="sel">[ P ] SOL — PLAY DEFAULT SYSTEM</li>
       <li data-act="same">[ S ] SOL — SAME SEED</li>
       <li data-act="rand">[ R ] SOL — NEW RANDOMIZED SYSTEM</li>
-      <li data-act="galaxy" id="galaxyItem">[ G ] GALAXY — LAN WAR</li>
+      <li data-act="galaxy" id="galaxyItem">[ G ] GALAXY — INTERNET ROOM</li>
       <li data-act="how">[ H ] HOW TO PLAY</li>
       <li data-act="hof">[ F ] HALL OF FAME (SOL)</li>
       <li data-act="bubble">[ K ] SHIP COMPUTER (BUBBLE): ON</li>
       <li data-act="mute">[ N ] AUDIO: ON</li>
     </ul>
     <div class="hint">
-      Two modes. SOL: one ship vs the Mandate in this solar system (works from a local file).<br>
-      GALAXY: same-Wi-Fi team war, 25 worlds, four races — run <b>python3 server.py</b> and open the printed URL.<br>
+      Two modes. SOL: one ship vs the Mandate in this solar system (works from a local file, no network).<br>
+      GALAXY: internet rooms, 25 worlds, four races — create a room, share the code. Live:
+      <b>https://z3ph1rus.github.io/ringfire/</b><br>
       Keyboard: rotate · 1–9 warp · SPACE photons · F phasers · X detonate · H hop · B beam · M map.
     </div>
-    <div id="lanNote" class="dim">For LAN: run python3 server.py</div>
+    <div id="lanNote">GALAXY: create a room or join with a code. Live: https://z3ph1rus.github.io/ringfire/</div>
     <div class="bubble-line" id="titleBubble"></div>
   </div>
 
@@ -492,14 +527,16 @@
       <li>Click a body (or nearest is shown) for the info sheet — owner, armies, guns, a real fact.</li>
       <li><kbd>P</kbd> or <kbd>ESC</kbd> pause (SOL). <kbd>N</kbd> mute. <kbd>K</kbd> Bubble (optional bad advice; never blocks you).</li>
     </ul>
-    <p><b style="color:var(--amber);font-weight:normal;">GALAXY (LAN)</b></p>
+    <p><b style="color:var(--amber);font-weight:normal;">GALAXY (INTERNET ROOMS)</b></p>
     <ul>
-      <li>Run <kbd>python3 server.py</kbd> on one machine. It prints a Wi-Fi URL. Everyone on the same network opens that URL.</li>
+      <li>Open <kbd>https://z3ph1rus.github.io/ringfire/</kbd>. One player CREATE ROOM and reads the 4-character code (shown large) plus this URL. Others JOIN ROOM with that code.</li>
+      <li>Two tabs on that same URL with the same code = two players. The host browser runs the match; closing the host tab ends it.</li>
       <li>Pick a name and a race (required). Four teams: Helios (gold, medium), Veil (green, slow/heavy), Spark (cyan, fast/light), Mandate (amber, medium-plus guns).</li>
-      <li>Multiple humans may share a race — it is a team. Host starts the match. Optional “fill empty races with AI”.</li>
+      <li>Multiple humans may share a race — it is a team. Host starts the match. Optional “fill empty races with AI”. Cap 12.</li>
       <li>25 worlds, homes in the four corners (3 planets each, 50 armies). Two neutrals on each edge, five in the center (25 self-ruled armies).</li>
       <li>Bomb, then beam down. Own all 25 to win. A race with zero planets cannot respawn.</li>
-      <li>IFF is color. Keyboard-first. <kbd>Enter</kbd> short LAN chat.</li>
+      <li>IFF is color. Keyboard-first. <kbd>Enter</kbd> short room chat.</li>
+      <li>Optional LAN fallback: <kbd>python3 server.py</kbd> on one machine, then everyone opens the printed Wi-Fi URL instead of a room code.</li>
     </ul>
     <p><b style="color:var(--amber);font-weight:normal;">VICTORY / DEFEAT</b></p>
     <ul>
@@ -554,29 +591,53 @@
 
   <div id="gxlobby" class="screen">
     <div class="back" data-back>← TITLE</div>
-    <h2>GALAXY  —  RACE SELECT</h2>
-    <p style="max-width:70ch;font-size:13px;line-height:1.5;margin-bottom:12px">
-      Four teams. Pick one before you can ready. Same race = allies. Neutrals hold the lanes until someone takes them.
-    </p>
-    <div style="margin-bottom:8px;color:var(--amber);font-size:13px">COMMANDER NAME</div>
-    <input id="gName" maxlength="16" placeholder="NAME" autocomplete="off" spellcheck="false">
-    <div class="races" id="raceGrid">
-      <div class="race helios" data-race="helios"><b>HELIOS</b><span>Gold / cream. Medium speed, medium guns. The balanced dart.</span></div>
-      <div class="race veil" data-race="veil"><b>VEIL</b><span>Green. Slowest hull, hardest-hitting phasers and photons.</span></div>
-      <div class="race spark" data-race="spark"><b>SPARK</b><span>Cyan. Fastest hop and cruise. Weakest weapons. Glass nose.</span></div>
-      <div class="race mandate" data-race="mandate"><b>MANDATE</b><span>Amber / red. Medium speed, slightly heavier guns than Helios.</span></div>
+
+    <div id="gxRoomGate">
+      <h2>GALAXY  —  INTERNET ROOM</h2>
+      <p style="max-width:70ch;font-size:13px;line-height:1.5;margin-bottom:16px">
+        Host creates a room and reads the code. Guests type that code. Same race = teammates.
+        The host browser runs the war. Live site: https://z3ph1rus.github.io/ringfire/
+      </p>
+      <ul class="menu">
+        <li data-act="create" id="gxCreate">[ C ] CREATE ROOM</li>
+      </ul>
+      <div style="margin-top:18px;color:var(--amber);font-size:13px">OR JOIN WITH A CODE</div>
+      <input id="gxJoinCode" maxlength="6" placeholder="CODE" autocomplete="off" spellcheck="false">
+      <ul class="menu" style="margin-top:10px">
+        <li data-act="joinroom" id="gxJoinBtn">[ J ] JOIN ROOM</li>
+      </ul>
+      <div id="gxNetErr"></div>
+      <div class="hint">Two tabs on this page with the same code = two players. No python. No LAN IP. Cap 12.</div>
     </div>
-    <ul class="menu" id="gxMenu">
-      <li data-act="ready" id="readyBtn">[ ENTER ] READY</li>
-    </ul>
-    <div class="hostbar">
-      <label><input type="checkbox" id="fillAI"> FILL EMPTY RACES WITH AI</label>
-      &nbsp;&nbsp;
-      <span id="hostStart" style="cursor:pointer;color:var(--crt)">[ L ] HOST: START MATCH</span>
+
+    <div id="gxRaceLobby" style="display:none">
+      <div class="room-kicker">ROOM CODE</div>
+      <div id="gxCodeBig">————</div>
+      <div class="hint" id="gxShareUrl"></div>
+      <h2 style="margin-top:18px">RACE SELECT</h2>
+      <p style="max-width:70ch;font-size:13px;line-height:1.5;margin-bottom:12px">
+        Four teams. Pick one before you can ready. Same race = allies. Neutrals hold the lanes until someone takes them.
+      </p>
+      <div style="margin-bottom:8px;color:var(--amber);font-size:13px">COMMANDER NAME</div>
+      <input id="gName" maxlength="16" placeholder="NAME" autocomplete="off" spellcheck="false">
+      <div class="races" id="raceGrid">
+        <div class="race helios" data-race="helios"><b>HELIOS</b><span>Gold / cream. Medium speed, medium guns. The balanced dart.</span></div>
+        <div class="race veil" data-race="veil"><b>VEIL</b><span>Green. Slowest hull, hardest-hitting phasers and photons.</span></div>
+        <div class="race spark" data-race="spark"><b>SPARK</b><span>Cyan. Fastest hop and cruise. Weakest weapons. Glass nose.</span></div>
+        <div class="race mandate" data-race="mandate"><b>MANDATE</b><span>Amber / red. Medium speed, slightly heavier guns than Helios.</span></div>
+      </div>
+      <ul class="menu" id="gxMenu">
+        <li data-act="ready" id="readyBtn">[ ENTER ] READY</li>
+      </ul>
+      <div class="hostbar">
+        <label><input type="checkbox" id="fillAI"> FILL EMPTY RACES WITH AI</label>
+        &nbsp;&nbsp;
+        <span id="hostStart" style="cursor:pointer;color:var(--crt)">[ L ] HOST: START MATCH</span>
+      </div>
+      <h2 style="margin-top:22px;font-size:14px">PLAYERS</h2>
+      <div id="plist" class="empty">NO ONE ON THE CHANNEL YET.</div>
+      <div class="hint" id="gxHint">Host starts when you are ready. Same race = teammates.</div>
     </div>
-    <h2 style="margin-top:22px;font-size:14px">PLAYERS</h2>
-    <div id="plist" class="empty">NO ONE ON THE CHANNEL YET.</div>
-    <div class="hint" id="gxHint">Share the URL printed by server.py. Two tabs on this machine = two players.</div>
   </div>
 
   <div id="gxend" class="screen">
@@ -591,6 +652,7 @@
   <div id="scan"></div>
   <div id="vignette"></div>
 </div>
+<script src="galaxy-sim.js"></script>
 <script src="game.js"></script>
 </body>
 </html>
