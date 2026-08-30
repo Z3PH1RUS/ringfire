@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RINGFIRE — a game by Caine</title>
+<style>
+  :root {
+    --crt: #7dff7a;
+    --crt-dim: #3d9a3a;
+    --amber: #ffc14a;
+    --amber-dim: #a67a22;
+    --alert: #ff5a4a;
+    --bg: #030704;
+    --panel: #071109;
+    --friend: #5ee07a;
+    --enemy: #e85a4a;
+    --mute: #8aa08a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: #000;
+    color: var(--crt);
+    font-family: "Lucida Console", "Courier New", Courier, monospace;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #bezel {
+    position: absolute; inset: 8px;
+    background: var(--bg);
+    border: 3px solid #1a3a1a;
+    box-shadow: inset 0 0 80px rgba(0, 40, 0, 0.55), 0 0 30px rgba(40, 180, 40, 0.08);
+    overflow: hidden;
+  }
+  #scan {
+    pointer-events: none;
+    position: absolute; inset: 0; z-index: 80;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 2px,
+      rgba(0,0,0,0.12) 3px
+    );
+    mix-blend-mode: multiply;
+  }
+  #vignette {
+    pointer-events: none;
+    position: absolute; inset: 0; z-index: 79;
+    box-shadow: inset 0 0 120px 24px rgba(0,0,0,0.72);
+  }
+  .screen { position: absolute; inset: 0; display: none; }
+  .screen.on { display: block; }
+
+  /* TITLE */
+  #title {
+    padding: 4vh 6vw;
+    overflow: auto;
+  }
+  #title pre.logo {
+    color: var(--amber);
+    font-size: clamp(7px, 1.5vw, 14px);
+    line-height: 1.05;
+    text-shadow: 0 0 8px rgba(255, 180, 40, 0.45);
+    margin-bottom: 10px;
+  }
+  #title .by {
+    color: var(--crt);
+    letter-spacing: 0.35em;
+    font-size: 13px;
+    margin-bottom: 18px;
+  }
+  #title .premise {
+    color: var(--amber);
+    max-width: 62ch;
+    line-height: 1.45;
+    margin-bottom: 22px;
+    font-size: 14px;
+  }
+  .menu {
+    list-style: none;
+    font-size: 16px;
+    line-height: 1.9;
+  }
+  .menu li {
+    cursor: pointer;
+    color: var(--crt);
+    width: fit-content;
+    padding: 0 6px;
+  }
+  .menu li:hover, .menu li.sel {
+    background: var(--crt);
+    color: #031003;
+    text-shadow: none;
+  }
+  .hint {
+    margin-top: 28px;
+    color: var(--crt-dim);
+    font-size: 12px;
+    line-height: 1.5;
+    max-width: 70ch;
+  }
+  .bubble-line {
+    margin-top: 18px;
+    color: var(--amber-dim);
+    font-size: 12px;
+    font-style: italic;
+    min-height: 1.4em;
+  }
+  .back {
+    position: absolute; top: 16px; left: 20px;
+    cursor: pointer; color: var(--amber);
+    font-size: 13px;
+  }
+  .back:hover { color: #fff3c0; }
+
+  /* HOW / HOF */
+  #how, #hof, #end {
+    padding: 48px 6vw 8vh;
+    overflow: auto;
+  }
+  h2 {
+    color: var(--amber);
+    letter-spacing: 0.25em;
+    font-size: 18px;
+    font-weight: normal;
+    margin-bottom: 16px;
+  }
+  #how p, #how li {
+    font-size: 13px;
+    line-height: 1.55;
+    max-width: 78ch;
+    color: var(--crt);
+  }
+  #how ul { margin: 8px 0 16px 1.2em; }
+  #how kbd {
+    color: var(--amber);
+    border: 1px solid var(--amber-dim);
+    padding: 0 5px;
+    font-family: inherit;
+  }
+  #hof table {
+    border-collapse: collapse;
+    font-size: 14px;
+    min-width: 420px;
+  }
+  #hof th, #hof td {
+    text-align: left;
+    padding: 4px 18px 4px 0;
+    border-bottom: 1px solid #143014;
+  }
+  #hof th { color: var(--amber); font-weight: normal; letter-spacing: 0.15em; }
+  .empty { color: var(--crt-dim); }
+
+  /* GAME */
+  #game { background: #000; }
+  #view {
+    position: absolute;
+    left: 0; top: 0; right: 268px; bottom: 86px;
+    width: calc(100% - 268px);
+    height: calc(100% - 86px);
+    display: block;
+    background: #010302;
+  }
+  #side {
+    position: absolute;
+    right: 0; top: 0; bottom: 86px;
+    width: 268px;
+    border-left: 1px solid #1c3c1c;
+    background: var(--panel);
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow: hidden;
+  }
+  #side h3 {
+    color: var(--amber);
+    font-size: 12px;
+    font-weight: normal;
+    letter-spacing: 0.2em;
+    margin-bottom: 8px;
+    border-bottom: 1px solid #2a4a20;
+    padding-bottom: 4px;
+  }
+  #side .kv { color: var(--crt); }
+  #side .kv b { color: var(--amber); font-weight: normal; }
+  #side .fact {
+    margin-top: 10px;
+    color: #b6d8b0;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  #side .owner-F { color: var(--friend); }
+  #side .owner-E { color: var(--enemy); }
+  #hud {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 86px;
+    border-top: 1px solid #1c3c1c;
+    background: #050a06;
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 0;
+    padding: 6px 10px 8px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+  #hud .cell b { color: var(--amber); font-weight: normal; }
+  #hud .warn { color: var(--alert); }
+  #hud .ok { color: var(--friend); }
+  #banner {
+    position: absolute;
+    left: 12px; top: 10px;
+    right: 280px;
+    z-index: 5;
+    font-size: 13px;
+    color: var(--amber);
+    text-shadow: 0 0 8px #000;
+    pointer-events: none;
+    min-height: 1.2em;
+  }
+  #banner.alert { color: var(--alert); }
+  #bubblebox {
+    position: absolute;
+    left: 12px; bottom: 96px;
+    max-width: 46ch;
+    font-size: 11px;
+    color: var(--amber-dim);
+    font-style: italic;
+    text-shadow: 0 0 6px #000;
+    pointer-events: none;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #bubblebox.on { opacity: 1; }
+  #touch {
+    display: none;
+    position: absolute;
+    left: 0; right: 268px; bottom: 86px;
+    height: 0;
+    z-index: 6;
+    pointer-events: none;
+  }
+  #touch .pad {
+    pointer-events: auto;
+    position: absolute;
+    background: rgba(20, 50, 20, 0.45);
+    border: 1px solid #3a6a3a;
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+  body.touch #view { bottom: 148px; height: calc(100% - 148px); }
+  body.touch #side { bottom: 148px; }
+  body.touch #hud { height: 148px; grid-template-rows: 70px 1fr; }
+  body.touch #touch { display: block; bottom: 0; left: 0; right: 0; height: 62px; }
+  body.touch #bubblebox { bottom: 158px; }
+  .tbtn {
+    pointer-events: auto;
+    display: inline-block;
+    margin: 4px 3px;
+    padding: 8px 10px;
+    background: rgba(30, 70, 30, 0.7);
+    border: 1px solid #4a8a4a;
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 12px;
+    min-width: 44px;
+  }
+  #touchbar {
+    display: none;
+    position: absolute;
+    left: 0; right: 0; bottom: 86px;
+    height: 62px;
+    background: rgba(0,0,0,0.55);
+    z-index: 7;
+    padding: 6px 4px;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  body.touch #touchbar { display: block; }
+  body.touch #view { bottom: 148px; height: calc(100% - 148px); }
+  body.touch #side { bottom: 148px; }
+
+  #pauseov, #mapnote {
+    display: none;
+    position: absolute;
+    inset: 0 268px 86px 0;
+    background: rgba(0, 8, 0, 0.55);
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    letter-spacing: 0.4em;
+    color: var(--amber);
+  }
+  #pauseov.on { display: flex; }
+  #namebox {
+    margin-top: 18px;
+  }
+  #namebox input {
+    background: #031003;
+    border: 1px solid var(--crt);
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 16px;
+    padding: 6px 8px;
+    outline: none;
+    width: 240px;
+  }
+  #end .big {
+    font-size: 22px;
+    letter-spacing: 0.2em;
+    color: var(--amber);
+    margin-bottom: 12px;
+  }
+  a, button.linky {
+    background: none; border: none;
+    color: var(--crt);
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+  }
+
+  .owner-H { color: #e8d48a; }
+  .owner-V { color: #3dcc5c; }
+  .owner-S { color: #3ad4d4; }
+  .owner-M { color: #e07038; }
+  .owner-N { color: #8aa08a; }
+  #lanNote {
+    margin-top: 14px;
+    color: var(--amber);
+    font-size: 13px;
+    max-width: 70ch;
+    line-height: 1.45;
+  }
+  #lanNote.dim { color: var(--crt-dim); }
+  .menu li.disabled { color: #3a5a3a; cursor: default; }
+  .menu li.disabled:hover { background: none; color: #3a5a3a; }
+
+  #gxlobby, #gxend {
+    padding: 36px 6vw 8vh;
+    overflow: auto;
+  }
+  .races {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    max-width: 640px;
+    margin: 12px 0 18px;
+  }
+  .race {
+    border: 2px solid;
+    padding: 14px 16px;
+    cursor: pointer;
+    min-height: 92px;
+  }
+  .race b { display: block; letter-spacing: 0.22em; font-weight: normal; font-size: 16px; margin-bottom: 6px; }
+  .race span { font-size: 12px; line-height: 1.4; opacity: 0.9; }
+  .race.helios { border-color: #e8d48a; color: #e8d48a; }
+  .race.veil { border-color: #3dcc5c; color: #3dcc5c; }
+  .race.spark { border-color: #3ad4d4; color: #3ad4d4; }
+  .race.mandate { border-color: #e07038; color: #e07038; }
+  .race.on.helios { background: #e8d48a; color: #1a1404; }
+  .race.on.veil { background: #3dcc5c; color: #041404; }
+  .race.on.spark { background: #3ad4d4; color: #041414; }
+  .race.on.mandate { background: #e07038; color: #1a0804; }
+  #gName {
+    background: #031003;
+    border: 1px solid var(--crt);
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 16px;
+    padding: 6px 8px;
+    outline: none;
+    width: 260px;
+  }
+  #plist { margin: 10px 0 16px; font-size: 13px; line-height: 1.7; max-width: 60ch; }
+  .hostbar { margin-top: 10px; font-size: 13px; color: var(--amber); }
+  .hostbar label { cursor: pointer; }
+  #chatlog {
+    position: absolute;
+    left: 12px; bottom: 96px;
+    max-width: 46ch;
+    font-size: 11px;
+    color: #b6d8b0;
+    text-shadow: 0 0 6px #000;
+    pointer-events: none;
+    z-index: 5;
+    line-height: 1.35;
+  }
+  #chatin {
+    display: none;
+    position: absolute;
+    left: 12px; bottom: 96px;
+    z-index: 12;
+    width: min(420px, 50%);
+  }
+  #chatin.on { display: block; }
+  #chatin input {
+    width: 100%;
+    background: #031003;
+    border: 1px solid var(--amber);
+    color: var(--crt);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 6px 8px;
+    outline: none;
+  }
+  #iff {
+    position: absolute;
+    right: 280px; top: 10px;
+    z-index: 5;
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    pointer-events: none;
+    text-shadow: 0 0 8px #000;
+  }
+</style>
+</head>
+<body>
+<div id="bezel">
+  <div id="title" class="screen on">
+    <pre class="logo">
+  ██████╗ ██╗███╗   ██╗ ██████╗ ███████╗██╗██████╗ ███████╗
+  ██╔══██╗██║████╗  ██║██╔════╝ ██╔════╝██║██╔══██╗██╔════╝
+  ██████╔╝██║██╔██╗ ██║██║  ███╗█████╗  ██║██████╔╝█████╗
+  ██╔══██╗██║██║╚██╗██║██║   ██║██╔══╝  ██║██╔══██╗██╔══╝
+  ██║  ██║██║██║ ╚████║╚██████╔╝██║     ██║██║  ██║███████╗
+  ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝
+    </pre>
+    <div class="by">A GAME BY CAINE</div>
+    <div class="premise">
+      THE MANDATE HOLDS TITAN. THE INNER WORLDS STILL STAND.<br>
+      ONE SHIP. REAL TIME. THE CLOCK IS RUNNING.
+    </div>
+    <ul class="menu" id="titleMenu">
+      <li data-act="play" class="sel">[ P ] SOL — PLAY DEFAULT SYSTEM</li>
+      <li data-act="same">[ S ] SOL — SAME SEED</li>
+      <li data-act="rand">[ R ] SOL — NEW RANDOMIZED SYSTEM</li>
+      <li data-act="galaxy" id="galaxyItem">[ G ] GALAXY — LAN WAR</li>
+      <li data-act="how">[ H ] HOW TO PLAY</li>
+      <li data-act="hof">[ F ] HALL OF FAME (SOL)</li>
+      <li data-act="bubble">[ K ] SHIP COMPUTER (BUBBLE): ON</li>
+      <li data-act="mute">[ N ] AUDIO: ON</li>
+    </ul>
+    <div class="hint">
+      Two modes. SOL: one ship vs the Mandate in this solar system (works from a local file).<br>
+      GALAXY: same-Wi-Fi team war, 25 worlds, four races — run <b>python3 server.py</b> and open the printed URL.<br>
+      Keyboard: rotate · 1–9 warp · SPACE photons · F phasers · X detonate · H hop · B beam · M map.
+    </div>
+    <div id="lanNote" class="dim">For LAN: run python3 server.py</div>
+    <div class="bubble-line" id="titleBubble"></div>
+  </div>
+
+  <div id="how" class="screen">
+    <div class="back" data-back>← TITLE</div>
+    <h2>HOW TO PLAY</h2>
+    <p>You command RF-1, last dart of the inner worlds. The Mandate — seated on Titan, moon of Saturn — occupies the outer system. Retake every planet. Moons are bases and army wells; they do not have to fall for victory, but they will decide the war.</p>
+    <p style="margin-top:10px"><b style="color:var(--amber);font-weight:normal;">FLIGHT</b></p>
+    <ul>
+      <li><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> rotate. Ship flies along its nose at current warp.</li>
+      <li><kbd>1</kbd>–<kbd>9</kbd> set warp. <kbd>+</kbd>/<kbd>-</kbd> nudge. Higher warp burns fuel hard and turns slower.</li>
+      <li>Fuel 0 = impulse crawl (warp locked 0) until you refuel in friendly orbit, not under fire.</li>
+    </ul>
+    <p><b style="color:var(--amber);font-weight:normal;">COMBAT</b></p>
+    <ul>
+      <li><kbd>SPACE</kbd> photon torpedo. Travels, can be dodged. Limited in flight (6). Hits ships or bombards a hostile disc.</li>
+      <li><kbd>X</kbd> or <kbd>G</kbd> detonate your own photons early — area damage (clears an orbit pile).</li>
+      <li><kbd>F</kbd> or <kbd>C</kbd> (or right-click) phasers: cone in front, instant hit, costs fuel.</li>
+      <li><kbd>H</kbd> hyperjump: short hop along your nose, high fuel, brief invulnerability. Lead or detonate the hop.</li>
+      <li><kbd>T</kbd> tracking missile (SOL only, limited, homing). Restocks slowly; faster in friendly orbit.</li>
+      <li><kbd>S</kbd> shields. Absorb hits, drain extra fuel. Hull 0 = you die.</li>
+      <li>Death: armies aboard are lost forever. You respawn at a friendly world you still own.</li>
+    </ul>
+    <p><b style="color:var(--amber);font-weight:normal;">CONQUEST</b></p>
+    <ul>
+      <li><kbd>B</kbd> beam (hold to keep transferring). Friendly orbit: pick up armies (a garrison stays). Hostile orbit: drop armies to invade.</li>
+      <li>Bombard first — torpedoes that strike a hostile world cut defenses, then garrison.</li>
+      <li>Hostile guns fire on ships in orbit. Suppress them. Then drop more armies than they can hold.</li>
+      <li>Ground war resolves over seconds. Winner keeps the world.</li>
+      <li>The Mandate also invades. Defend weakly held inner worlds.</li>
+    </ul>
+    <p><b style="color:var(--amber);font-weight:normal;">SHIP SYSTEMS</b></p>
+    <ul>
+      <li>Refuel is automatic in safe friendly orbit (Class-M in GALAXY is much faster). <kbd>U</kbd> extra dump. <kbd>R</kbd> repair hull in friendly orbit.</li>
+      <li>Fuel regenerates slowly in space. Warp, phasers, photons, and hops all spend it. Impulse crawl at 0.</li>
+      <li><kbd>[</kbd> <kbd>]</kbd> or <kbd>,</kbd> <kbd>.</kbd> radar zoom. <kbd>M</kbd> strategic map (SOL: action slows; GALAXY: time keeps running for everyone).</li>
+      <li>Click a body (or nearest is shown) for the info sheet — owner, armies, guns, a real fact.</li>
+      <li><kbd>P</kbd> or <kbd>ESC</kbd> pause (SOL). <kbd>N</kbd> mute. <kbd>K</kbd> Bubble (optional bad advice; never blocks you).</li>
+    </ul>
+    <p><b style="color:var(--amber);font-weight:normal;">GALAXY (LAN)</b></p>
+    <ul>
+      <li>Run <kbd>python3 server.py</kbd> on one machine. It prints a Wi-Fi URL. Everyone on the same network opens that URL.</li>
+      <li>Pick a name and a race (required). Four teams: Helios (gold, medium), Veil (green, slow/heavy), Spark (cyan, fast/light), Mandate (amber, medium-plus guns).</li>
+      <li>Multiple humans may share a race — it is a team. Host starts the match. Optional “fill empty races with AI”.</li>
+      <li>25 worlds, homes in the four corners (3 planets each, 50 armies). Two neutrals on each edge, five in the center (25 self-ruled armies).</li>
+      <li>Bomb, then beam down. Own all 25 to win. A race with zero planets cannot respawn.</li>
+      <li>IFF is color. Keyboard-first. <kbd>Enter</kbd> short LAN chat.</li>
+    </ul>
+    <p><b style="color:var(--amber);font-weight:normal;">VICTORY / DEFEAT</b></p>
+    <ul>
+      <li>WIN: all nine planets are friendly (Mercury through Pluto). Fastest time → hall of fame.</li>
+      <li>LOSE: no friendly planets remain — nowhere to respawn. Earth falling hurts; it is not automatic defeat.</li>
+    </ul>
+    <p class="hint">A skilled SOL run should be possible in 10–20 minutes. Take a moon, suppress guns, drop armies, move on.</p>
+    <p class="hint" style="margin-top:16px">Credits: Caine. Inspired by 1973 PLATO Empire (Daleske et al.) and 1983 Apple II solar-system war games.
+    Silas Warner (later Muse) helped Empire I with lesson space — mention only. Original names, art, and code; nothing copied from Muse, Empire, or those 1983 disks.</p>
+  </div>
+
+  <div id="hof" class="screen">
+    <div class="back" data-back>← TITLE</div>
+    <h2>HALL OF FAME</h2>
+    <p class="empty" id="hofEmpty">NO NAMES. THE RING IS STILL BURNING.</p>
+    <table id="hofTable" style="display:none">
+      <thead><tr><th>#</th><th>COMMANDER</th><th>TIME</th><th>SYSTEM</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="game" class="screen">
+    <canvas id="view"></canvas>
+    <div id="banner"></div>
+    <div id="iff"></div>
+    <div id="bubblebox"></div>
+    <div id="chatlog"></div>
+    <div id="chatin"><input id="chatIn" maxlength="72" placeholder="MESSAGE  ENTER SEND  ESC CANCEL" autocomplete="off" spellcheck="false"></div>
+    <aside id="side"></aside>
+    <div id="hud"></div>
+    <div id="pauseov">PAUSED</div>
+    <div id="touchbar"></div>
+  </div>
+
+  <div id="end" class="screen">
+    <div class="big" id="endTitle">RING CLOSED</div>
+    <p id="endText" style="max-width:60ch;line-height:1.5;margin-bottom:16px;"></p>
+    <div id="namebox" style="display:none">
+      <div style="margin-bottom:8px;color:var(--amber)">ENTER NAME FOR HALL OF FAME</div>
+      <input id="nameIn" maxlength="16" placeholder="COMMANDER" autocomplete="off" spellcheck="false">
+      <div class="menu" style="margin-top:10px">
+        <li id="saveName">[ ENTER ] SAVE</li>
+      </div>
+    </div>
+    <ul class="menu" style="margin-top:22px">
+      <li data-act="again">[ P ] PLAY AGAIN (SAME SEED)</li>
+      <li data-act="rand">[ R ] NEW RANDOMIZED SYSTEM</li>
+      <li data-act="hof">[ F ] HALL OF FAME</li>
+      <li data-act="title">[ T ] TITLE</li>
+    </ul>
+  </div>
+
+  <div id="gxlobby" class="screen">
+    <div class="back" data-back>← TITLE</div>
+    <h2>GALAXY  —  RACE SELECT</h2>
+    <p style="max-width:70ch;font-size:13px;line-height:1.5;margin-bottom:12px">
+      Four teams. Pick one before you can ready. Same race = allies. Neutrals hold the lanes until someone takes them.
+    </p>
+    <div style="margin-bottom:8px;color:var(--amber);font-size:13px">COMMANDER NAME</div>
+    <input id="gName" maxlength="16" placeholder="NAME" autocomplete="off" spellcheck="false">
+    <div class="races" id="raceGrid">
+      <div class="race helios" data-race="helios"><b>HELIOS</b><span>Gold / cream. Medium speed, medium guns. The balanced dart.</span></div>
+      <div class="race veil" data-race="veil"><b>VEIL</b><span>Green. Slowest hull, hardest-hitting phasers and photons.</span></div>
+      <div class="race spark" data-race="spark"><b>SPARK</b><span>Cyan. Fastest hop and cruise. Weakest weapons. Glass nose.</span></div>
+      <div class="race mandate" data-race="mandate"><b>MANDATE</b><span>Amber / red. Medium speed, slightly heavier guns than Helios.</span></div>
+    </div>
+    <ul class="menu" id="gxMenu">
+      <li data-act="ready" id="readyBtn">[ ENTER ] READY</li>
+    </ul>
+    <div class="hostbar">
+      <label><input type="checkbox" id="fillAI"> FILL EMPTY RACES WITH AI</label>
+      &nbsp;&nbsp;
+      <span id="hostStart" style="cursor:pointer;color:var(--crt)">[ L ] HOST: START MATCH</span>
+    </div>
+    <h2 style="margin-top:22px;font-size:14px">PLAYERS</h2>
+    <div id="plist" class="empty">NO ONE ON THE CHANNEL YET.</div>
+    <div class="hint" id="gxHint">Share the URL printed by server.py. Two tabs on this machine = two players.</div>
+  </div>
+
+  <div id="gxend" class="screen">
+    <div class="big" id="gxendTitle">GALAXY QUIET</div>
+    <p id="gxendText" style="max-width:60ch;line-height:1.5;margin-bottom:16px;"></p>
+    <ul class="menu">
+      <li data-act="gxlobby">[ L ] LOBBY</li>
+      <li data-act="title">[ T ] TITLE</li>
+    </ul>
+  </div>
+
+  <div id="scan"></div>
+  <div id="vignette"></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
