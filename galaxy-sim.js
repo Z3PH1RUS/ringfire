@@ -6,6 +6,7 @@
   var TAU = Math.PI * 2.0;
   var TICK_HZ = 20.0;
   var DT = 1.0 / TICK_HZ;
+  var PLAY_RATE = 0.8; /* 20% slower fight: sim dt, speeds, weapon cadence */
   var MAX_PLAYERS = 12;
   var MAX_TORP_INFLIGHT = 6;
   var MAX_CHAT = 10;
@@ -170,6 +171,8 @@
     this.elim = {};
     this.overReason = "";
     this.tickN = 0;
+    this.killCount = 0;
+    this.bossSpawned = 0;
     if (humans.length) {
       for (i = 0; i < humans.length; i++) {
         p = humans[i];
@@ -275,7 +278,8 @@
       ai: false, host: false, alive: false,
       inp: {}, seq: 0, last: nowSec(),
       chatT: 0.0,
-      didX: false, didH: false, didS: false, didM: false
+      didX: false, didH: false, didS: false, didM: false,
+      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null
     };
     if (opts.host) this.hostId = pid;
     else if (this.hostId == null && !this.hostLocked) this.hostId = pid;
@@ -337,6 +341,8 @@
     this.overReason = "";
     this.time = 0.0;
     this.tickN = 0;
+    this.killCount = 0;
+    this.bossSpawned = 0;
     present = {};
     for (id in this.players) {
       p = this.players[id];
@@ -350,6 +356,11 @@
     }
     var list = vals(this.players);
     for (i = 0; i < list.length; i++) {
+      list[i].score = 0;
+      list[i].upgradeTier = 0;
+      list[i].boss = 0;
+      list[i].dmgMul = 1.0;
+      list[i].lastHit = null;
       if (RACES[list[i].race]) this.spawnShip(list[i], true);
     }
     this.phase = "play";
@@ -365,7 +376,8 @@
       ready: true, ai: true, host: false, alive: false,
       inp: {}, seq: 0, last: nowSec(),
       state: "patrol", huntT: 0.0, tgt: null,
-      didX: false, didH: false, didS: false
+      didX: false, didH: false, didS: false,
+      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null
     };
     this.players[pid] = rec;
     return rec;
@@ -385,6 +397,33 @@
     return { b: b, x: b.x + Math.cos(a) * (b.r + 28), y: b.y + Math.sin(a) * (b.r + 28), ang: a + Math.PI * 0.5 };
   };
 
+  Game.prototype.hostile = function (a, b) {
+    if (!a || !b || a === b) return false;
+    if (a.boss || b.boss) return true;
+    return a.race !== b.race;
+  };
+
+  Game.prototype.upgradeMul = function (p) {
+    var tier = Math.min(5, Math.floor((p.score || 0) / 10));
+    return 1.0 + tier * 0.1;
+  };
+
+  Game.prototype.applyUpgrade = function (p) {
+    if (!p || !RACES[p.race] || p.boss) return;
+    var rs = RACES[p.race];
+    var tier = Math.min(5, Math.floor((p.score || 0) / 10));
+    p.upgradeTier = tier;
+    var mul = 1.0 + tier * 0.1;
+    var nf = rs.fuel * mul;
+    var ns = 70.0 * mul;
+    var df = nf - (p.maxFuel || rs.fuel);
+    var ds = ns - (p.maxShields || 70);
+    p.maxFuel = nf;
+    p.maxShields = ns;
+    if (df > 0) p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + df);
+    if (ds > 0) p.shields = Math.min(p.maxShields, (p.shields || 0) + ds);
+  };
+
   Game.prototype.spawnShip = function (p, first) {
     var sp = this.spawnPoint(p.race);
     if (!sp) {
@@ -393,6 +432,7 @@
       return false;
     }
     var rs = RACES[p.race];
+    var keepScore = p.score || 0;
     p.x = sp.x; p.y = sp.y; p.ang = sp.ang; p.warp = 0;
     p.hull = rs.hull; p.maxHull = rs.hull;
     p.fuel = rs.fuel; p.maxFuel = rs.fuel;
@@ -402,6 +442,22 @@
     p.invuln = first ? 2.2 : 1.8;
     p.torpCd = 0.0; p.phaserCd = 0.0; p.beamCd = 0.0; p.hyperCd = 0.0;
     p.hyperI = 0.0; p.repairing = false; p.lostArmies = 0;
+    p.score = keepScore;
+    p.lastHit = null;
+    p.dmgMul = 1.0;
+    if (p.boss) {
+      p.name = "BOSS";
+      p.maxHull = Math.round(rs.hull * 1.4);
+      p.hull = p.maxHull;
+      p.maxFuel = rs.fuel * 1.4;
+      p.fuel = p.maxFuel;
+      p.maxShields = Math.round(70 * 1.4);
+      p.shields = p.maxShields;
+      p.dmgMul = 1.4;
+      p.upgradeTier = 0;
+    } else {
+      this.applyUpgrade(p);
+    }
     return true;
   };
 
@@ -439,7 +495,7 @@
       x: ship.x + Math.cos(ang) * 14,
       y: ship.y + Math.sin(ang) * 14,
       vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
-      life: 1.85, dmg: 18.0 * rs.torp, r: 2.6
+      life: 1.85, dmg: 18.0 * rs.torp * (ship.dmgMul || 1), r: 2.6
     });
     ship.torpCd = 0.38;
     ship.fuel = Math.max(0.0, ship.fuel - 2.4);
@@ -460,14 +516,14 @@
     for (i = 0; i < list.length; i++) {
       o = list[i];
       if (o === ship || !o.alive) continue;
-      if (o.race === ship.race) continue;
+      if (!this.hostile(ship, o)) continue;
       d = dist(ship.x, ship.y, o.x, o.y);
       if (d > reach || d < 4) continue;
       want = angTo(ship.x, ship.y, o.x, o.y);
       if (Math.abs(angNorm(want - ship.ang)) > half) continue;
       fall = 1.0 - 0.55 * (d / reach);
-      dmg = 17.0 * rs.phaser * fall;
-      this.hitShip(o, dmg);
+      dmg = 17.0 * rs.phaser * (ship.dmgMul || 1) * fall;
+      this.hitShip(o, dmg, ship.id);
     }
   };
 
@@ -506,10 +562,11 @@
       o = list[i];
       if (!o.alive) continue;
       if (o.id === oid) continue;
-      if (o.race === race) continue;
+      var src = this.players[oid];
+      if (!((src && src.boss) || o.boss) && o.race === race) continue;
       d = dist(x, y, o.x, o.y);
       if (d < radius + 10) {
-        this.hitShip(o, dmg * (1.0 - 0.4 * (d / (radius + 10))));
+        this.hitShip(o, dmg * (1.0 - 0.4 * (d / (radius + 10))), oid);
       }
     }
     for (i = 0; i < this.planets.length; i++) {
@@ -530,8 +587,9 @@
     }
   };
 
-  Game.prototype.hitShip = function (ship, dmg) {
+  Game.prototype.hitShip = function (ship, dmg, srcId) {
     if ((ship.invuln || 0) > 0 || (ship.hyperI || 0) > 0) return;
+    if (srcId && this.players[srcId]) ship.lastHit = srcId;
     if (ship.shieldsOn && (ship.shields || 0) > 0) {
       var soak = Math.min(ship.shields, dmg * 0.82);
       ship.shields -= soak;
@@ -547,14 +605,64 @@
 
   Game.prototype.killShip = function (ship) {
     var lost = (ship.armies || 0) | 0;
+    var wasBoss = !!ship.boss;
     ship.armies = 0;
     ship.alive = false;
     ship.hull = 0;
-    ship.spawnT = 2.3;
+    ship.spawnT = wasBoss ? 0 : 2.3;
     ship.lostArmies = lost;
-    this.emit("die", { sid: ship.id, n: lost, x: r1(ship.x || 0), y: r1(ship.y || 0) });
+    var killer = this.players[ship.lastHit];
+    if (killer && killer.id !== ship.id) {
+      killer.score = (killer.score || 0) + 1;
+      this.applyUpgrade(killer);
+    }
+    this.killCount = (this.killCount || 0) + 1;
+    this.emit("die", { sid: ship.id, n: lost, x: r1(ship.x || 0), y: r1(ship.y || 0), B: wasBoss ? 1 : 0 });
     var sid = ship.id;
     this.torps = this.torps.filter(function (t) { return t.oid !== sid; });
+    if (wasBoss) ship.elim = true;
+    this.maybeBoss();
+  };
+
+  Game.prototype.pickBossRace = function () {
+    var humans = this.humanList(), used = {}, i, r;
+    for (i = 0; i < humans.length; i++) used[humans[i].race] = 1;
+    for (i = 0; i < RACE_ORDER.length; i++) {
+      r = RACE_ORDER[i];
+      if (!used[r] && this.racePlanets(r).length) return r;
+    }
+    for (i = 0; i < RACE_ORDER.length; i++) {
+      r = RACE_ORDER[i];
+      if (this.racePlanets(r).length) return r;
+    }
+    return "mandate";
+  };
+
+  Game.prototype.maybeBoss = function () {
+    var need = ((this.bossSpawned || 0) + 1) * 50;
+    if ((this.killCount || 0) < need) return;
+    var list = vals(this.players), i, aliveB = 0;
+    for (i = 0; i < list.length; i++) if (list[i].boss && list[i].alive) aliveB++;
+    if (aliveB >= 3) return;
+    this.bossSpawned = (this.bossSpawned || 0) + 1;
+    var preferred = this.pickBossRace();
+    var tries = RACE_ORDER.slice();
+    tries.sort(function (a, b) { return a === preferred ? -1 : b === preferred ? 1 : 0; });
+    var rec = null, race;
+    for (i = 0; i < tries.length; i++) {
+      race = tries[i];
+      rec = this.spawnAI(race);
+      rec.boss = 1;
+      rec.name = "BOSS";
+      if (this.spawnShip(rec, true)) break;
+      delete this.players[rec.id];
+      rec = null;
+    }
+    if (!rec || !rec.alive) return;
+    rec.huntT = 10;
+    rec.state = "hunt";
+    this.emit("boss", { sid: rec.id, r: rec.race, x: r1(rec.x), y: r1(rec.y) });
+    this.addChat("RINGFIRE", rec.race, "BOSS SHIP DETECTED");
   };
 
   Game.prototype.tryBeam = function (ship) {
@@ -711,7 +819,7 @@
     var best = null, bd = lim, list = vals(this.players), i, o, d;
     for (i = 0; i < list.length; i++) {
       o = list[i];
-      if (o === e || !o.alive || o.race === e.race) continue;
+      if (o === e || !o.alive || !this.hostile(e, o)) continue;
       d = dist(e.x, e.y, o.x, o.y);
       if (d < bd) { bd = d; best = o; }
     }
@@ -769,7 +877,9 @@
       if ((p.spawnT || 0) > 0) {
         p.spawnT -= dt;
         if (p.spawnT <= 0) {
-          if (!this.racePlanets(p.race).length) {
+          if (p.boss) {
+            p.elim = true;
+          } else if (!this.racePlanets(p.race).length) {
             this.elim[p.race] = 1;
             p.elim = true;
           } else this.spawnShip(p, false);
@@ -852,9 +962,13 @@
       hit = false;
       for (j = 0; j < list.length; j++) {
         o = list[j];
-        if (!o.alive || o.id === t.oid || o.race === t.race) continue;
+        if (!o.alive || o.id === t.oid) continue;
+        var shooter = this.players[t.oid];
+        if (shooter) {
+          if (!this.hostile(shooter, o)) continue;
+        } else if (!o.boss && o.race === t.race) continue;
         if (dist(t.x, t.y, o.x, o.y) < 11 + t.r) {
-          this.hitShip(o, t.dmg);
+          this.hitShip(o, t.dmg, t.oid);
           this.emit("boom", { x: r1(t.x), y: r1(t.y) });
           hit = true;
           break;
@@ -1007,7 +1121,7 @@
       this.sweepStale();
       return;
     }
-    var dt = DT;
+    var dt = DT * PLAY_RATE;
     this.time += dt;
     this.tickN += 1;
     var list = vals(this.players), i, p;
@@ -1067,7 +1181,11 @@
         i: ((p.invuln || 0) > 0 || (p.hyperI || 0) > 0) ? 1 : 0,
         z: r1(p.flash || 0),
         ai: p.ai ? 1 : 0,
-        el: this.elim[p.race] ? 1 : 0
+        el: this.elim[p.race] ? 1 : 0,
+        k: (p.score || 0) | 0,
+        u: (p.upgradeTier || 0) | 0,
+        B: p.boss ? 1 : 0,
+        Q: r1(p.maxShields || 70)
       });
     }
     var planets = [];
@@ -1120,6 +1238,7 @@
     MAX_PLAYERS: MAX_PLAYERS,
     DT: DT,
     TICK_HZ: TICK_HZ,
+    PLAY_RATE: PLAY_RATE,
     PLANET_DEFS: PLANET_DEFS
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;

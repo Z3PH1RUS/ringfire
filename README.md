@@ -77,6 +77,12 @@ SOL: the Mandate also invades. You lose when no friendly planets remain. Win: al
 
 GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short room chat.
 
+## Combat feel
+Explosions use particles, shock rings, and debris (about 30% larger than before). Near a planet the client camera zooms in 30% with the ship centered, then eases out. Warp and hyper-hop play a short Web Audio whoosh. The whole fight runs about 20% slower.
+
+## Score and upgrades
+HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/30/40/50 kills your max energy and shields are 10/20/30/40/50% above the ship baseline (not stacked on the previous bonus). A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score/upgrades are per player; the host spawns bosses.
+
 ## Controls
 | Key | Action |
 | --- | --- |
