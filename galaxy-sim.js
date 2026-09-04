@@ -14,11 +14,6 @@
   var MAX_CHAT = 10;
   var STALE_SEC = 12.0;
   var HOST_STALE_SEC = 18.0;
-  var START_FUEL = 130;
-  var START_MARINES = 20;
-  var CAPTURE_MARINES = 60;
-  var MAX_MARINES = 64;
-  var LIMP_WARP = 2;
 
   var RACES = {
     helios: {
@@ -231,7 +226,7 @@
   Game.prototype.updateAutoOrbit = function (ship, dt, inp) {
     var b = this.orbitPlanet(ship);
     if (!b) { ship.orbitPid = null; return false; }
-    if ((inp.l || inp.r) || (inp.w != null && inp.w > 0) || (ship.warp || 0) > 0) {
+    if ((inp.w != null && inp.w > 0) || (ship.warp || 0) > 0) {
       this.breakOrbit(ship);
       return false;
     }
@@ -239,6 +234,9 @@
     ship.x = b.x + Math.cos(ship.orbitAng) * ship.orbitDist;
     ship.y = b.y + Math.sin(ship.orbitAng) * ship.orbitDist;
     ship.ang = ship.orbitAng + Math.PI * 0.5;
+    var rs = RACES[ship.race] || RACES.helios;
+    if (inp.l) ship.ang -= turnRate(0, rs.turn) * dt;
+    if (inp.r) ship.ang += turnRate(0, rs.turn) * dt;
     ship.x = clamp(ship.x, -80, 1680);
     ship.y = clamp(ship.y, -80, 1680);
     return true;
@@ -564,9 +562,25 @@
     return a.race !== b.race;
   };
 
+  Game.prototype.upgradeMul = function (p) {
+    var tier = Math.min(5, Math.floor((p.score || 0) / 10));
+    return 1.0 + tier * 0.1;
+  };
+
   Game.prototype.applyUpgrade = function (p) {
     if (!p || !RACES[p.race] || p.boss) return;
-    p.upgradeTier = 0;
+    var rs = RACES[p.race];
+    var tier = Math.min(5, Math.floor((p.score || 0) / 10));
+    p.upgradeTier = tier;
+    var mul = 1.0 + tier * 0.1;
+    var nf = rs.fuel * mul;
+    var ns = 70.0 * mul;
+    var df = nf - (p.maxFuel || rs.fuel);
+    var ds = ns - (p.maxShields || 70);
+    p.maxFuel = nf;
+    p.maxShields = ns;
+    if (df > 0) p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + df);
+    if (ds > 0) p.shields = Math.min(p.maxShields, (p.shields || 0) + ds);
   };
 
   Game.prototype.spawnShip = function (p, first) {
@@ -584,8 +598,8 @@
     p.orbitDist = 0;
     p.orbitSpd = 0;
     p.hull = rs.hull; p.maxHull = rs.hull;
-    p.fuel = START_FUEL; p.maxFuel = START_FUEL;
-    p.armies = first ? START_MARINES : 0; p.maxArmies = MAX_MARINES;
+    p.fuel = rs.fuel; p.maxFuel = rs.fuel;
+    p.armies = 0; p.maxArmies = 16;
     p.shieldsOn = false; p.shields = 70; p.maxShields = 70;
     p.alive = true; p.spawnT = 0.0; p.flash = 0.0;
     p.invuln = first ? 2.2 : 1.8;
@@ -864,12 +878,10 @@
       n -= clash;
       if (b.battle.atk <= 0) b.battle = n > 0 ? { side: side, atk: n, t: 0.0 } : null;
     }
-    if (b.battle && b.battle.atk >= CAPTURE_MARINES) b.armies = 0;
   };
 
   Game.prototype.tickBattle = function (b, dt) {
     if (!b.battle) return;
-    if (b.battle.atk >= CAPTURE_MARINES) b.armies = 0;
     b.battle.t += dt;
     if (b.battle.t < 0.45) return;
     b.battle.t = 0.0;
@@ -1058,13 +1070,10 @@
     if (inp.l) p.ang -= turnRate(p.warp || 0, rs.turn) * dt;
     if (inp.r) p.ang += turnRate(p.warp || 0, rs.turn) * dt;
     var w = inp.w;
-    if (w != null) {
-      if (p.fuel > 0) p.warp = clamp(w | 0, 0, 9);
-      else p.warp = clamp(w | 0, 0, LIMP_WARP);
-    }
+    if (w != null && p.fuel > 0) p.warp = clamp(w | 0, 0, 9);
     if (p.fuel <= 0) {
       p.fuel = 0;
-      if (p.warp > LIMP_WARP) p.warp = LIMP_WARP;
+      p.warp = 0;
       p.shieldsOn = false;
     }
 
@@ -1081,7 +1090,7 @@
       p.y = clamp(p.y, -80, 1680);
     }
 
-    p.fuel -= p.fuel > 0 ? fuelBurn(p.warp || 0, p.shieldsOn) * dt : 0;
+    p.fuel -= fuelBurn(p.warp || 0, p.shieldsOn) * dt;
 
     var dock = this.orbiting(p);
     if (dock && dock.owner === p.race) {
@@ -1415,11 +1424,6 @@
     DT: DT,
     TICK_HZ: TICK_HZ,
     PLAY_RATE: PLAY_RATE,
-    START_FUEL: START_FUEL,
-    START_MARINES: START_MARINES,
-    CAPTURE_MARINES: CAPTURE_MARINES,
-    MAX_MARINES: MAX_MARINES,
-    LIMP_WARP: LIMP_WARP,
     PLANET_DEFS: PLANET_DEFS
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
