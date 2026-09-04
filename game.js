@@ -14,7 +14,7 @@
   var LS_SET = "ringfire-settings-v1";
   var PLAY_RATE = 0.8;       /* 20% slower fight (sim dt / speeds / cadence) */
   var BLAST_SCALE = 1.45;    /* cinematic blast radius (was 1.3) */
-  var MUSIC_GAIN = 0.38;     /* procedural background pad — clearly audible */
+  var MUSIC_GAIN = 0.5;      /* procedural background pad — clearly audible */
   var SFX_GAIN = 2;          /* sound effects 2× prior per-call levels */
   var PLANET_ZOOM = 1.3;     /* 30% camera zoom-in near a planet, ship centered */
   var BASE_FUEL = 100;
@@ -143,6 +143,8 @@
     musicHi: null,
     musicTimer: null,
     musicStep: 0,
+    _musicOnTimer: null,
+    _musicAnnounced: false,
     init: function () {
       if (this.ctx) return;
       var AC = window.AudioContext || window.webkitAudioContext;
@@ -165,23 +167,69 @@
     },
     setMuted: function (m) {
       this.muted = m;
+      this.init();
       this.syncMusicGain();
-      if (!m) this.startMusic();
+      if (m) this.stopMusic();
+      else this.ensureMusicPlaying();
+    },
+    stopMusic: function () {
+      this.musicOn = false;
+      if (this.musicTimer) {
+        clearTimeout(this.musicTimer);
+        this.musicTimer = null;
+      }
+      if (this.musicParts) {
+        for (var si = 0; si < this.musicParts.length; si++) {
+          var node = this.musicParts[si];
+          try { if (node.stop) node.stop(0); } catch (e1) {}
+          try { node.disconnect(); } catch (e2) {}
+        }
+        this.musicParts = null;
+      }
+      this.musicPads = null;
+      this.musicHi = null;
+    },
+    _musicAlive: function () {
+      return !!(this.musicOn && this.musicPads && this.musicPads.length > 0 &&
+        this.musicTimer && this.ctx && this.ctx.state === "running");
+    },
+    _showMusicOn: function () {
+      if (!el || !el.banner) return;
+      el.banner.textContent = "MUSIC ON";
+      el.banner.className = "";
+      var self = this;
+      if (self._musicOnTimer) clearTimeout(self._musicOnTimer);
+      self._musicOnTimer = setTimeout(function () {
+        if (el.banner && el.banner.textContent === "MUSIC ON") el.banner.textContent = "";
+      }, 2200);
+    },
+    ensureMusicPlaying: function () {
+      if (!this.enabled || this.muted) return;
+      this.init();
+      if (!this.ctx) return;
+      var self = this;
+      function run() {
+        if (!self.ctx || self.ctx.state !== "running" || self.muted) return;
+        if (self._musicAlive()) return;
+        if (self.musicOn) self.stopMusic();
+        self.startMusic();
+      }
+      if (this.ctx.state === "suspended") {
+        this.ctx.resume().then(run).catch(run);
+      } else {
+        run();
+      }
     },
     resume: function () {
       this.init();
       if (!this.ctx) return;
-      var self = this;
-      if (this.ctx.state === "suspended") {
-        this.ctx.resume().then(function () { self.startMusic(); }).catch(function () { self.startMusic(); });
-      } else {
-        this.startMusic();
-      }
+      this.ensureMusicPlaying();
     },
     startMusic: function () {
-      if (this.musicOn || !this.enabled || this.muted) return;
+      if (!this.enabled || this.muted) return;
       this.init();
-      if (!this.ctx) return;
+      if (!this.ctx || this.ctx.state !== "running") return;
+      if (this.musicOn) return;
       this.musicOn = true;
       this.syncMusicGain();
       var ctx = this.ctx;
@@ -268,6 +316,10 @@
 
       this.musicStep = 0;
       this._musicChordTick();
+      if (!this._musicAnnounced) {
+        this._musicAnnounced = true;
+        this._showMusicOn();
+      }
     },
     _musicChordTick: function () {
       if (!this.musicOn || !this.ctx || !this.musicPads) return;
@@ -393,7 +445,7 @@
       if (typeof sparsed.muted === "boolean") settings.muted = sparsed.muted;
     }
   } catch (e) {}
-  audio.setMuted(settings.muted);
+  audio.muted = settings.muted;
   var LAN_OK = false;
   var LAN_INFO = null;
 
@@ -2332,10 +2384,12 @@
     });
   }
   buildTouch();
-  document.addEventListener("pointerdown", function () { audio.resume(); }, { passive: true });
+  function wakeAudio() { audio.resume(); }
+  document.addEventListener("pointerdown", wakeAudio, { passive: true });
+  document.addEventListener("click", wakeAudio, { passive: true });
   window.addEventListener("touchstart", function () {
     document.body.classList.add("touch");
-    audio.resume();
+    wakeAudio();
   }, { passive: true, once: false });
 
   /* ---------- camera follow / map camera ---------- */
