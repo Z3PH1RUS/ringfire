@@ -13,7 +13,9 @@
   var LS_CFG = "ringfire-last-cfg-v1";
   var LS_SET = "ringfire-settings-v1";
   var PLAY_RATE = 0.8;       /* 20% slower fight (sim dt / speeds / cadence) */
-  var BLAST_SCALE = 1.3;     /* explosions 30% bigger than prior blast size */
+  var BLAST_SCALE = 1.45;    /* cinematic blast radius (was 1.3) */
+  var MUSIC_GAIN = 0.38;     /* procedural background pad — clearly audible */
+  var SFX_GAIN = 2;          /* sound effects 2× prior per-call levels */
   var PLANET_ZOOM = 1.3;     /* 30% camera zoom-in near a planet, ship centered */
   var BASE_FUEL = 100;
   var BASE_SHIELDS = 80;
@@ -128,12 +130,19 @@
     "A moon is a planet that learned to orbit someone else's problem."
   ];
 
-  /* ---------- audio (optional; fully silent is fine) ---------- */
+  /* ---------- audio (procedural music + SFX) ---------- */
   var audio = {
     ctx: null,
     muted: false,
     enabled: true,
     master: null,
+    musicBus: null,
+    musicOn: false,
+    musicParts: null,
+    musicPads: null,
+    musicHi: null,
+    musicTimer: null,
+    musicStep: 0,
     init: function () {
       if (this.ctx) return;
       var AC = window.AudioContext || window.webkitAudioContext;
@@ -142,10 +151,146 @@
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.12;
       this.master.connect(this.ctx.destination);
+      this.musicBus = this.ctx.createGain();
+      this.musicBus.gain.value = 0;
+      this.musicBus.connect(this.ctx.destination);
+    },
+    sfxPeak: function (vol, scale) {
+      return Math.min(1, (vol || 0.15) * (scale == null ? 1 : scale) * SFX_GAIN);
+    },
+    syncMusicGain: function () {
+      if (!this.musicBus || !this.ctx) return;
+      var g = this.muted ? 0.0001 : MUSIC_GAIN;
+      this.musicBus.gain.setTargetAtTime(g, this.ctx.currentTime, 0.08);
+    },
+    setMuted: function (m) {
+      this.muted = m;
+      this.syncMusicGain();
+      if (!m) this.startMusic();
     },
     resume: function () {
       this.init();
-      if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+      if (!this.ctx) return;
+      var self = this;
+      if (this.ctx.state === "suspended") {
+        this.ctx.resume().then(function () { self.startMusic(); }).catch(function () { self.startMusic(); });
+      } else {
+        this.startMusic();
+      }
+    },
+    startMusic: function () {
+      if (this.musicOn || !this.enabled || this.muted) return;
+      this.init();
+      if (!this.ctx) return;
+      this.musicOn = true;
+      this.syncMusicGain();
+      var ctx = this.ctx;
+      var t = ctx.currentTime;
+      var parts = this.musicParts = [];
+      var bus = this.musicBus;
+      var i, nLen, nd, last, w;
+
+      nLen = Math.floor(ctx.sampleRate * 4);
+      var nbuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
+      nd = nbuf.getChannelData(0);
+      last = 0;
+      for (i = 0; i < nLen; i++) {
+        w = Math.random() * 2 - 1;
+        last = (last + 0.02 * w) / 1.02;
+        nd[i] = last * 2.5;
+      }
+      var nSrc = ctx.createBufferSource();
+      nSrc.buffer = nbuf;
+      nSrc.loop = true;
+      var nFilt = ctx.createBiquadFilter();
+      nFilt.type = "bandpass";
+      nFilt.frequency.value = 300;
+      nFilt.Q.value = 0.65;
+      var nGain = ctx.createGain();
+      nGain.gain.value = 0.24;
+      nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(bus);
+      nSrc.start(t);
+      parts.push(nSrc, nFilt, nGain);
+
+      var nLfo = ctx.createOscillator();
+      nLfo.frequency.value = 0.035;
+      var nLfoG = ctx.createGain();
+      nLfoG.gain.value = 160;
+      nLfo.connect(nLfoG); nLfoG.connect(nFilt.frequency);
+      nLfo.start(t);
+      parts.push(nLfo, nLfoG);
+
+      var bases = [55, 82.5, 110];
+      this.musicPads = [];
+      for (i = 0; i < 3; i++) {
+        var o1 = ctx.createOscillator();
+        var o2 = ctx.createOscillator();
+        o1.type = "triangle";
+        o2.type = "sine";
+        o1.frequency.value = bases[i];
+        o2.frequency.value = bases[i] * (i === 1 ? 1.006 : 0.994);
+        var pG = ctx.createGain();
+        pG.gain.value = i === 0 ? 0.38 : 0.24;
+        var pF = ctx.createBiquadFilter();
+        pF.type = "lowpass";
+        pF.frequency.value = 720;
+        pF.Q.value = 0.4;
+        o1.connect(pF); o2.connect(pF); pF.connect(pG); pG.connect(bus);
+        o1.start(t); o2.start(t);
+        this.musicPads.push({ o1: o1, o2: o2, base: bases[i] });
+        parts.push(o1, o2, pG, pF);
+      }
+
+      var hi = ctx.createOscillator();
+      hi.type = "sine";
+      hi.frequency.value = 220;
+      var hiG = ctx.createGain();
+      hiG.gain.value = 0.07;
+      var hiF = ctx.createBiquadFilter();
+      hiF.type = "highpass";
+      hiF.frequency.value = 380;
+      hi.connect(hiF); hiF.connect(hiG); hiG.connect(bus);
+      hi.start(t);
+      this.musicHi = hi;
+      parts.push(hi, hiG, hiF);
+
+      var sub = ctx.createOscillator();
+      sub.type = "sine";
+      sub.frequency.value = 41.2;
+      var subG = ctx.createGain();
+      subG.gain.value = 0.42;
+      var subF = ctx.createBiquadFilter();
+      subF.type = "lowpass";
+      subF.frequency.value = 95;
+      sub.connect(subF); subF.connect(subG); subG.connect(bus);
+      sub.start(t);
+      parts.push(sub, subG, subF);
+
+      this.musicStep = 0;
+      this._musicChordTick();
+    },
+    _musicChordTick: function () {
+      if (!this.musicOn || !this.ctx || !this.musicPads) return;
+      var prog = [
+        [1, 1.25, 1.5],
+        [0.89, 1.122, 1.335],
+        [0.794, 1, 1.189],
+        [0.667, 0.841, 1]
+      ];
+      var chord = prog[this.musicStep % prog.length];
+      this.musicStep++;
+      var ctx = this.ctx;
+      var t = ctx.currentTime + 0.04;
+      var pads = this.musicPads;
+      var i;
+      for (i = 0; i < pads.length; i++) {
+        var f = pads[i].base * chord[i];
+        pads[i].o1.frequency.setTargetAtTime(f, t, 3.2);
+        pads[i].o2.frequency.setTargetAtTime(f * 1.004, t, 3.2);
+      }
+      if (this.musicHi) this.musicHi.frequency.setTargetAtTime(220 * chord[1], t, 3.2);
+      var self = this;
+      this.musicTimer = setTimeout(function () { self._musicChordTick(); }, 10000);
     },
     beep: function (freq, dur, type, vol, slide) {
       if (this.muted || !this.enabled) return;
@@ -157,13 +302,15 @@
       o.type = type || "square";
       o.frequency.setValueAtTime(freq, t);
       if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
-      g.gain.setValueAtTime((vol || 0.2) * 0.8, t);
+      g.gain.setValueAtTime(this.sfxPeak(vol || 0.2, 0.8), t);
       g.gain.exponentialRampToValueAtTime(0.001, t + dur);
       o.connect(g); g.connect(this.master);
       o.start(t); o.stop(t + dur + 0.02);
     },
     noise: function (dur, vol) {
-      if (this.muted || !this.enabled || !this.ctx) return;
+      if (this.muted || !this.enabled) return;
+      this.init();
+      if (!this.ctx) return;
       var n = Math.floor(this.ctx.sampleRate * dur);
       var buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
       var d = buf.getChannelData(0);
@@ -172,7 +319,7 @@
       s.buffer = buf;
       var g = this.ctx.createGain();
       var t = this.ctx.currentTime;
-      g.gain.setValueAtTime(vol || 0.15, t);
+      g.gain.setValueAtTime(this.sfxPeak(vol, 1), t);
       g.gain.exponentialRampToValueAtTime(0.001, t + dur);
       s.connect(g); g.connect(this.master);
       s.start();
@@ -246,12 +393,19 @@
       if (typeof sparsed.muted === "boolean") settings.muted = sparsed.muted;
     }
   } catch (e) {}
-  audio.muted = settings.muted;
+  audio.setMuted(settings.muted);
   var LAN_OK = false;
   var LAN_INFO = null;
 
   function saveSettings() {
     try { localStorage.setItem(LS_SET, JSON.stringify(settings)); } catch (e) {}
+  }
+  function toggleAudioMuted() {
+    settings.muted = !settings.muted;
+    audio.setMuted(settings.muted);
+    saveSettings();
+    refreshTitleMenu();
+    if (G) G.status = settings.muted ? "AUDIO OFF" : "AUDIO ON";
   }
 
   /* ---------- game state ---------- */
@@ -586,26 +740,35 @@
   function spawnExplosion(list, x, y, color, power) {
     power = power == null ? 1 : power;
     var blast = BLAST_SCALE;
-    var i, a, s, life, n, nd;
-    n = Math.floor(22 * power);
+    var i, a, s, life, n, nd, em;
+    n = Math.floor(30 * power);
     for (i = 0; i < n; i++) {
       a = Math.random() * TAU;
-      s = (12 + Math.random() * 78) * blast * (0.7 + 0.3 * power);
-      life = 0.55 + Math.random() * 0.75;
-      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, color, (1.6 + Math.random() * 2.6) * blast, { kind: "spark" });
+      s = (14 + Math.random() * 88) * blast * (0.7 + 0.3 * power);
+      life = 0.6 + Math.random() * 0.85;
+      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, color, (1.8 + Math.random() * 3) * blast, { kind: "spark" });
     }
-    nd = Math.floor(9 * power);
+    em = Math.floor(8 * power);
+    for (i = 0; i < em; i++) {
+      a = Math.random() * TAU;
+      s = (4 + Math.random() * 22) * blast;
+      life = 1.1 + Math.random() * 1.2;
+      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, Math.random() < 0.5 ? "#ffb860" : "#ffe8a8", (1.2 + Math.random() * 2) * blast, { kind: "ember" });
+    }
+    nd = Math.floor(13 * power);
     for (i = 0; i < nd; i++) {
       a = Math.random() * TAU;
-      s = (8 + Math.random() * 38) * blast;
-      life = 0.95 + Math.random() * 0.95;
-      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, Math.random() < 0.45 ? "#c8a070" : color, (2.2 + Math.random() * 3.2) * blast, {
-        kind: "debris", rot: Math.random() * TAU, spin: (Math.random() - 0.5) * 9
+      s = (10 + Math.random() * 46) * blast;
+      life = 1.05 + Math.random() * 1.1;
+      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, Math.random() < 0.45 ? "#c8a070" : color, (2.4 + Math.random() * 3.6) * blast, {
+        kind: "debris", rot: Math.random() * TAU, spin: (Math.random() - 0.5) * 10
       });
     }
-    addParticle(list, x, y, 0, 0, 0.32, "#fff6d0", 18 * blast * power, { kind: "flash" });
-    addParticle(list, x, y, 0, 0, 0.52, "#ffe8a0", 2, { kind: "ring", r0: 4, r1: 44 * blast * power, lw: 2.4 });
-    addParticle(list, x, y, 0, 0, 0.82, color, 2, { kind: "ring", r0: 8, r1: 62 * blast * power, lw: 1.35 });
+    addParticle(list, x, y, 0, 0, 0.48, "#fffef8", 24 * blast * power, { kind: "flash" });
+    addParticle(list, x, y, 0, 0, 0.36, "#ffb860", 16 * blast * power, { kind: "flash" });
+    addParticle(list, x, y, 0, 0, 0.58, "#ffe8a0", 2, { kind: "ring", r0: 5, r1: 50 * blast * power, lw: 2.8 });
+    addParticle(list, x, y, 0, 0, 0.88, color, 2, { kind: "ring", r0: 10, r1: 72 * blast * power, lw: 1.6 });
+    addParticle(list, x, y, 0, 0, 1.25, "#ffd080", 2, { kind: "ring", r0: 16, r1: 96 * blast * power, lw: 0.9, faint: true });
   }
   function burst(x, y, n, color, spd) {
     spawnExplosion(G.particles, x, y, color, Math.max(0.4, (n || 18) / 22));
@@ -618,9 +781,13 @@
       q.x += (q.vx || 0) * dt;
       q.y += (q.vy || 0) * dt;
       if (q.kind === "debris") q.rot = (q.rot || 0) + (q.spin || 0) * dt;
-      if (q.kind === "spark" || q.kind === "debris") {
+      if (q.kind === "spark" || q.kind === "debris" || q.kind === "ember") {
         q.vx *= Math.max(0, 1 - 1.55 * dt);
         q.vy *= Math.max(0, 1 - 1.55 * dt);
+      }
+      if (q.kind === "ember") {
+        q.vy += 18 * dt;
+        q.vx *= Math.max(0, 1 - 0.35 * dt);
       }
       if (q.life <= 0) { list.splice(i, 1); continue; }
       qs = wtsFn(q.x, q.y);
@@ -629,14 +796,21 @@
       if (q.kind === "ring") {
         rad = (q.r0 || 4) + ((q.r1 || 40) - (q.r0 || 4)) * (1 - fade);
         ctx.strokeStyle = q.color;
-        ctx.lineWidth = (q.lw || 1.5) * Math.max(0.6, fade);
+        ctx.lineWidth = (q.lw || 1.5) * Math.max(0.6, fade) * (q.faint ? 0.55 : 1);
+        ctx.globalAlpha = fade * (q.faint ? 0.45 : 0.85);
         ctx.beginPath();
         ctx.arc(qs.x, qs.y, rad * zoom, 0, TAU);
         ctx.stroke();
+        ctx.globalAlpha = fade;
       } else if (q.kind === "flash") {
-        ctx.fillStyle = q.color;
+        var fr = (q.size || 14) * zoom * (0.4 + 0.6 * fade);
+        var grad = ctx.createRadialGradient(qs.x, qs.y, 0, qs.x, qs.y, fr);
+        grad.addColorStop(0, q.color);
+        grad.addColorStop(0.45, q.color);
+        grad.addColorStop(1, "rgba(0,0,0,0)");
+        ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(qs.x, qs.y, (q.size || 14) * zoom * (0.45 + 0.55 * fade), 0, TAU);
+        ctx.arc(qs.x, qs.y, fr, 0, TAU);
         ctx.fill();
       } else if (q.kind === "debris") {
         ctx.save();
@@ -645,6 +819,11 @@
         ctx.fillStyle = q.color;
         ctx.fillRect(-(q.size || 3), -(q.size || 3) * 0.28, (q.size || 3) * 2, (q.size || 3) * 0.55);
         ctx.restore();
+      } else if (q.kind === "ember") {
+        ctx.fillStyle = q.color;
+        ctx.beginPath();
+        ctx.arc(qs.x, qs.y, (q.size || 2) * zoom * (0.5 + 0.5 * fade), 0, TAU);
+        ctx.fill();
       } else {
         ctx.fillStyle = q.color;
         ctx.fillRect(qs.x, qs.y, q.size || 2, q.size || 2);
@@ -1921,7 +2100,7 @@
     else if (act === "how") showScreen("how");
     else if (act === "hof") { renderHof(); showScreen("hof"); }
     else if (act === "bubble") { settings.bubble = !settings.bubble; saveSettings(); refreshTitleMenu(); }
-    else if (act === "mute") { settings.muted = !settings.muted; audio.muted = settings.muted; saveSettings(); refreshTitleMenu(); }
+    else if (act === "mute") toggleAudioMuted();
   }
 
 
@@ -1990,10 +2169,7 @@
         toggleMap();
       }
       if (k === "n") {
-        settings.muted = !settings.muted;
-        audio.muted = settings.muted;
-        saveSettings();
-        if (G) G.status = settings.muted ? "AUDIO OFF" : "AUDIO ON";
+        toggleAudioMuted();
       }
       if (k === "k") {
         settings.bubble = !settings.bubble;
@@ -2034,6 +2210,7 @@
   }
 
   el.canvas.addEventListener("mousedown", function (e) {
+    audio.resume();
     var r = el.canvas.getBoundingClientRect();
     if (e.button === 2) {
       pointer.right = true;
@@ -2047,6 +2224,7 @@
   });
   el.canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   el.canvas.addEventListener("touchstart", function (e) {
+    audio.resume();
     if (!e.changedTouches[0]) return;
     var r = el.canvas.getBoundingClientRect();
     var t = e.changedTouches[0];
@@ -2075,6 +2253,7 @@
   }
 
   el.titleMenu.addEventListener("click", function (e) {
+    audio.resume();
     var li = e.target.closest("li");
     if (!li) return;
     handleTitleAct(li.getAttribute("data-act"));
@@ -2153,6 +2332,7 @@
     });
   }
   buildTouch();
+  document.addEventListener("pointerdown", function () { audio.resume(); }, { passive: true });
   window.addEventListener("touchstart", function () {
     document.body.classList.add("touch");
     audio.resume();
@@ -3103,6 +3283,7 @@
   }
 
   function gxEnterMatch() {
+    audio.resume();
     if (screen === "game" && playMode === "galaxy") return;
     playMode = "galaxy";
     GX.over = false;
@@ -3270,7 +3451,7 @@
     }
     if (k === "m") GX.mapOpen = !GX.mapOpen;
     if (k === "l") GX.targetLock = false;
-    if (k === "n") { settings.muted = !settings.muted; audio.muted = settings.muted; saveSettings(); }
+    if (k === "n") toggleAudioMuted();
     if (k === "escape") { /* no pause on host clock */ }
     return true;
   }
