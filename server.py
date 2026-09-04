@@ -27,6 +27,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 TAU = math.pi * 2.0
 TICK_HZ = 20.0
 DT = 1.0 / TICK_HZ
+PLAY_RATE = 0.4  # 50% slower fight vs prior pace (matches galaxy-sim.js)
 MAX_PLAYERS = 12
 MAX_TORP_INFLIGHT = 6
 MAX_CHAT = 10
@@ -1018,7 +1019,7 @@ class Game:
         if self.phase != "play":
             self.sweep_stale()
             return
-        dt = DT
+        dt = DT * PLAY_RATE
         self.time += dt
         self.tick_n += 1
         for p in list(self.players.values()):

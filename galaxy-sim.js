@@ -6,7 +6,7 @@
   var TAU = Math.PI * 2.0;
   var TICK_HZ = 20.0;
   var DT = 1.0 / TICK_HZ;
-  var PLAY_RATE = 0.8; /* 20% slower fight: sim dt, speeds, weapon cadence */
+  var PLAY_RATE = 0.4; /* 50% slower fight vs prior pace: sim dt, speeds, weapon cadence */
   var MAX_PLAYERS = 12;
   var MAX_TORP_INFLIGHT = 6;
   var MAX_CHAT = 10;

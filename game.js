@@ -12,9 +12,9 @@
   var LS_SEED = "ringfire-last-seed-v1";
   var LS_CFG = "ringfire-last-cfg-v1";
   var LS_SET = "ringfire-settings-v1";
-  var PLAY_RATE = 0.8;       /* 20% slower fight (sim dt / speeds / cadence) */
+  var PLAY_RATE = 0.4;       /* 50% slower fight vs prior pace (sim dt / speeds / cadence) */
   var BLAST_SCALE = 1.45;    /* cinematic blast radius (was 1.3) */
-  var MUSIC_GAIN = 0.5;      /* procedural background pad — clearly audible */
+  var MUSIC_GAIN = 0.5;      /* procedural invader-pulse bed — clearly audible */
   var SFX_GAIN = 2;          /* sound effects 2× prior per-call levels */
   var PLANET_ZOOM = 1.3;     /* 30% camera zoom-in near a planet, ship centered */
   var BASE_FUEL = 100;
@@ -139,10 +139,9 @@
     musicBus: null,
     musicOn: false,
     musicParts: null,
-    musicPads: null,
-    musicHi: null,
     musicTimer: null,
-    musicStep: 0,
+    musicPulseStep: 0,
+    musicThreat: 0,
     _musicOnTimer: null,
     _musicAnnounced: false,
     init: function () {
@@ -151,7 +150,7 @@
       if (!AC) { this.enabled = false; return; }
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.12;
+      this.master.gain.value = 0.38;
       this.master.connect(this.ctx.destination);
       this.musicBus = this.ctx.createGain();
       this.musicBus.gain.value = 0;
@@ -159,6 +158,24 @@
     },
     sfxPeak: function (vol, scale) {
       return Math.min(1, (vol || 0.15) * (scale == null ? 1 : scale) * SFX_GAIN);
+    },
+    _playSfx: function (fn) {
+      if (this.muted || !this.enabled) return;
+      this.init();
+      if (!this.ctx) return;
+      var self = this;
+      function run() {
+        if (!self.ctx || self.ctx.state !== "running" || self.muted) return;
+        fn();
+      }
+      if (this.ctx.state === "suspended") {
+        this.ctx.resume().then(run).catch(run);
+      } else {
+        run();
+      }
+    },
+    setThreat: function (level) {
+      this.musicThreat = clamp(level, 0, 1);
     },
     syncMusicGain: function () {
       if (!this.musicBus || !this.ctx) return;
@@ -186,12 +203,9 @@
         }
         this.musicParts = null;
       }
-      this.musicPads = null;
-      this.musicHi = null;
     },
     _musicAlive: function () {
-      return !!(this.musicOn && this.musicPads && this.musicPads.length > 0 &&
-        this.musicTimer && this.ctx && this.ctx.state === "running");
+      return !!(this.musicOn && this.musicTimer && this.ctx && this.ctx.state === "running");
     },
     _showMusicOn: function () {
       if (!el || !el.banner) return;
@@ -236,159 +250,137 @@
       var t = ctx.currentTime;
       var parts = this.musicParts = [];
       var bus = this.musicBus;
-      var i, nLen, nd, last, w;
 
-      nLen = Math.floor(ctx.sampleRate * 4);
-      var nbuf = ctx.createBuffer(1, nLen, ctx.sampleRate);
-      nd = nbuf.getChannelData(0);
-      last = 0;
-      for (i = 0; i < nLen; i++) {
-        w = Math.random() * 2 - 1;
-        last = (last + 0.02 * w) / 1.02;
-        nd[i] = last * 2.5;
-      }
-      var nSrc = ctx.createBufferSource();
-      nSrc.buffer = nbuf;
-      nSrc.loop = true;
-      var nFilt = ctx.createBiquadFilter();
-      nFilt.type = "bandpass";
-      nFilt.frequency.value = 300;
-      nFilt.Q.value = 0.65;
-      var nGain = ctx.createGain();
-      nGain.gain.value = 0.24;
-      nSrc.connect(nFilt); nFilt.connect(nGain); nGain.connect(bus);
-      nSrc.start(t);
-      parts.push(nSrc, nFilt, nGain);
+      var drone = ctx.createOscillator();
+      drone.type = "sine";
+      drone.frequency.value = 55;
+      var dG = ctx.createGain();
+      dG.gain.value = 0.055;
+      var dF = ctx.createBiquadFilter();
+      dF.type = "lowpass";
+      dF.frequency.value = 110;
+      drone.connect(dF); dF.connect(dG); dG.connect(bus);
+      drone.start(t);
+      parts.push(drone, dG, dF);
 
-      var nLfo = ctx.createOscillator();
-      nLfo.frequency.value = 0.035;
-      var nLfoG = ctx.createGain();
-      nLfoG.gain.value = 160;
-      nLfo.connect(nLfoG); nLfoG.connect(nFilt.frequency);
-      nLfo.start(t);
-      parts.push(nLfo, nLfoG);
-
-      var bases = [55, 82.5, 110];
-      this.musicPads = [];
-      for (i = 0; i < 3; i++) {
-        var o1 = ctx.createOscillator();
-        var o2 = ctx.createOscillator();
-        o1.type = "triangle";
-        o2.type = "sine";
-        o1.frequency.value = bases[i];
-        o2.frequency.value = bases[i] * (i === 1 ? 1.006 : 0.994);
-        var pG = ctx.createGain();
-        pG.gain.value = i === 0 ? 0.38 : 0.24;
-        var pF = ctx.createBiquadFilter();
-        pF.type = "lowpass";
-        pF.frequency.value = 720;
-        pF.Q.value = 0.4;
-        o1.connect(pF); o2.connect(pF); pF.connect(pG); pG.connect(bus);
-        o1.start(t); o2.start(t);
-        this.musicPads.push({ o1: o1, o2: o2, base: bases[i] });
-        parts.push(o1, o2, pG, pF);
-      }
-
-      var hi = ctx.createOscillator();
-      hi.type = "sine";
-      hi.frequency.value = 220;
-      var hiG = ctx.createGain();
-      hiG.gain.value = 0.07;
-      var hiF = ctx.createBiquadFilter();
-      hiF.type = "highpass";
-      hiF.frequency.value = 380;
-      hi.connect(hiF); hiF.connect(hiG); hiG.connect(bus);
-      hi.start(t);
-      this.musicHi = hi;
-      parts.push(hi, hiG, hiF);
-
-      var sub = ctx.createOscillator();
-      sub.type = "sine";
-      sub.frequency.value = 41.2;
-      var subG = ctx.createGain();
-      subG.gain.value = 0.42;
-      var subF = ctx.createBiquadFilter();
-      subF.type = "lowpass";
-      subF.frequency.value = 95;
-      sub.connect(subF); subF.connect(subG); subG.connect(bus);
-      sub.start(t);
-      parts.push(sub, subG, subF);
-
-      this.musicStep = 0;
-      this._musicChordTick();
+      this.musicPulseStep = 0;
+      this.musicThreat = 0;
+      this._musicPulse();
       if (!this._musicAnnounced) {
         this._musicAnnounced = true;
         this._showMusicOn();
       }
     },
-    _musicChordTick: function () {
-      if (!this.musicOn || !this.ctx || !this.musicPads) return;
-      var prog = [
-        [1, 1.25, 1.5],
-        [0.89, 1.122, 1.335],
-        [0.794, 1, 1.189],
-        [0.667, 0.841, 1]
-      ];
-      var chord = prog[this.musicStep % prog.length];
-      this.musicStep++;
+    _musicPulse: function () {
+      if (!this.musicOn || !this.ctx) return;
+      var threat = this.musicThreat || 0;
+      var interval = 0.52 - threat * 0.40;
+      var pattern = [164.8, 155.6, 146.8, 138.6];
+      var note = pattern[this.musicPulseStep % 4];
+      this.musicPulseStep++;
       var ctx = this.ctx;
-      var t = ctx.currentTime + 0.04;
-      var pads = this.musicPads;
-      var i;
-      for (i = 0; i < pads.length; i++) {
-        var f = pads[i].base * chord[i];
-        pads[i].o1.frequency.setTargetAtTime(f, t, 3.2);
-        pads[i].o2.frequency.setTargetAtTime(f * 1.004, t, 3.2);
+      var tm = ctx.currentTime;
+      var bus = this.musicBus;
+
+      var bass = ctx.createOscillator();
+      bass.type = "square";
+      bass.frequency.value = note;
+      var bF = ctx.createBiquadFilter();
+      bF.type = "lowpass";
+      bF.frequency.value = 420 + threat * 280;
+      bF.Q.value = 0.7;
+      var bG = ctx.createGain();
+      var peak = 0.22 + threat * 0.12;
+      bG.gain.setValueAtTime(peak, tm);
+      bG.gain.exponentialRampToValueAtTime(0.001, tm + 0.11);
+      bass.connect(bF); bF.connect(bG); bG.connect(bus);
+      bass.start(tm); bass.stop(tm + 0.13);
+
+      var sub = ctx.createOscillator();
+      sub.type = "sine";
+      sub.frequency.value = note * 0.5;
+      var sG = ctx.createGain();
+      sG.gain.setValueAtTime(0.14 + threat * 0.08, tm);
+      sG.gain.exponentialRampToValueAtTime(0.001, tm + 0.14);
+      sub.connect(sG); sG.connect(this.musicBus);
+      sub.start(tm); sub.stop(tm + 0.15);
+
+      if (this.musicPulseStep % 2 === 0) {
+        var click = ctx.createOscillator();
+        click.type = "triangle";
+        click.frequency.value = 880 + threat * 220;
+        var cG = ctx.createGain();
+        cG.gain.setValueAtTime(0.018 + threat * 0.02, tm);
+        cG.gain.exponentialRampToValueAtTime(0.001, tm + 0.025);
+        click.connect(cG); cG.connect(bus);
+        click.start(tm); click.stop(tm + 0.03);
       }
-      if (this.musicHi) this.musicHi.frequency.setTargetAtTime(220 * chord[1], t, 3.2);
+
       var self = this;
-      this.musicTimer = setTimeout(function () { self._musicChordTick(); }, 10000);
+      this.musicTimer = setTimeout(function () { self._musicPulse(); }, interval * 1000);
     },
     beep: function (freq, dur, type, vol, slide) {
-      if (this.muted || !this.enabled) return;
-      this.init();
-      if (!this.ctx) return;
-      var t = this.ctx.currentTime;
-      var o = this.ctx.createOscillator();
-      var g = this.ctx.createGain();
-      o.type = type || "square";
-      o.frequency.setValueAtTime(freq, t);
-      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
-      g.gain.setValueAtTime(this.sfxPeak(vol || 0.2, 0.8), t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      o.connect(g); g.connect(this.master);
-      o.start(t); o.stop(t + dur + 0.02);
+      var self = this;
+      this._playSfx(function () {
+        var t = self.ctx.currentTime;
+        var o = self.ctx.createOscillator();
+        var g = self.ctx.createGain();
+        o.type = type || "square";
+        o.frequency.setValueAtTime(freq, t);
+        if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
+        g.gain.setValueAtTime(self.sfxPeak(vol || 0.2, 0.8), t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        o.connect(g); g.connect(self.master);
+        o.start(t); o.stop(t + dur + 0.02);
+      });
     },
     noise: function (dur, vol) {
-      if (this.muted || !this.enabled) return;
-      this.init();
-      if (!this.ctx) return;
-      var n = Math.floor(this.ctx.sampleRate * dur);
-      var buf = this.ctx.createBuffer(1, n, this.ctx.sampleRate);
-      var d = buf.getChannelData(0);
-      for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-      var s = this.ctx.createBufferSource();
-      s.buffer = buf;
-      var g = this.ctx.createGain();
-      var t = this.ctx.currentTime;
-      g.gain.setValueAtTime(this.sfxPeak(vol, 1), t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-      s.connect(g); g.connect(this.master);
-      s.start();
+      var self = this;
+      this._playSfx(function () {
+        var n = Math.floor(self.ctx.sampleRate * dur);
+        var buf = self.ctx.createBuffer(1, n, self.ctx.sampleRate);
+        var d = buf.getChannelData(0);
+        for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+        var s = self.ctx.createBufferSource();
+        s.buffer = buf;
+        var g = self.ctx.createGain();
+        var t = self.ctx.currentTime;
+        g.gain.setValueAtTime(self.sfxPeak(vol, 1), t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        s.connect(g); g.connect(self.master);
+        s.start();
+      });
+    },
+    sfxExplode: function (power) {
+      power = power == null ? 1 : power;
+      var vol = 0.24 + power * 0.14;
+      this.noise(0.16 + power * 0.14, vol);
+      this.beep(62, 0.12 + power * 0.1, "sawtooth", vol * 0.9, 32);
+      this.beep(130, 0.07 + power * 0.05, "square", vol * 0.55, 75);
+    },
+    sfxTorpFire: function () {
+      this.beep(520, 0.045, "square", 0.24);
+      this.beep(280, 0.07, "sawtooth", 0.2, 150);
+      this.noise(0.035, 0.14);
+    },
+    sfxPhaserFire: function () {
+      this.beep(880, 0.07, "square", 0.18);
+      this.beep(420, 0.09, "sawtooth", 0.16, 190);
+      this.noise(0.025, 0.1);
     },
     warp: function (hop) {
-      if (this.muted || !this.enabled) return;
-      this.init();
-      if (!this.ctx) return;
-      if (hop) {
-        this.noise(0.22, 0.2);
-        this.beep(260, 0.28, "sawtooth", 0.16, 55);
-        this.beep(110, 0.2, "square", 0.1, 40);
-      } else {
-        this.noise(0.16, 0.14);
-        this.beep(90, 0.34, "sawtooth", 0.15, 480);
-        this.beep(200, 0.18, "triangle", 0.1, 80);
-      }
+      var self = this;
+      this._playSfx(function () {
+        if (hop) {
+          self.noise(0.22, 0.2);
+          self.beep(260, 0.28, "sawtooth", 0.16, 55);
+          self.beep(110, 0.2, "square", 0.1, 40);
+        } else {
+          self.noise(0.16, 0.14);
+          self.beep(90, 0.34, "sawtooth", 0.15, 480);
+          self.beep(200, 0.18, "triangle", 0.1, 80);
+        }
+      });
     }
   };
 
@@ -822,8 +814,10 @@
     addParticle(list, x, y, 0, 0, 0.88, color, 2, { kind: "ring", r0: 10, r1: 72 * blast * power, lw: 1.6 });
     addParticle(list, x, y, 0, 0, 1.25, "#ffd080", 2, { kind: "ring", r0: 16, r1: 96 * blast * power, lw: 0.9, faint: true });
   }
-  function burst(x, y, n, color, spd) {
-    spawnExplosion(G.particles, x, y, color, Math.max(0.4, (n || 18) / 22));
+  function burst(x, y, n, color, spd, sfx) {
+    var power = Math.max(0.4, (n || 18) / 22);
+    spawnExplosion(G.particles, x, y, color, power);
+    if (sfx !== false) audio.sfxExplode(power);
   }
   function drawParticles(list, dt, wtsFn, zoom) {
     var i, q, qs, a, rad, fade;
@@ -934,6 +928,7 @@
     G.bannerT = 4.5;
     G.status = "BOSS CONTACT";
     spawnExplosion(G.particles, home.x + 36, home.y - 28, "#ffb020", 0.7);
+    audio.sfxExplode(0.7);
   }
 
   var torpSeq = 1;
@@ -952,6 +947,7 @@
       target: null,
       r: 2.4
     });
+    audio.sfxTorpFire();
   }
   function countTorps(ship) {
     var n = 0, i, pr;
@@ -994,16 +990,13 @@
       any = true;
     }
     if (any) {
-      audio.noise(0.12, 0.16);
-      audio.beep(90, 0.1, "sawtooth", 0.12);
       G.status = "PHOTONS DETONATED";
     }
   }
   function firePhaser(ship, side) {
     var reach = 195, half = 0.46, i, en, d, want, fall, dmg;
     G.phaserFlash = { x: ship.x, y: ship.y, ang: ship.ang, t: 0.12, reach: reach, half: half };
-    audio.beep(880, 0.06, "square", 0.1);
-    audio.beep(420, 0.08, "sawtooth", 0.08, 180);
+    audio.sfxPhaserFire();
     if (side === "player") {
       for (i = 0; i < G.enemies.length; i++) {
         en = G.enemies[i];
@@ -1079,8 +1072,6 @@
       if (ship.alive) {
         ship.alive = false;
         burst(ship.x, ship.y, 28, isPlayer ? "#7dff7a" : "#e85a4a", 80);
-        audio.noise(0.35, 0.22);
-        audio.beep(90, 0.4, "sawtooth", 0.2, 40);
         if (isPlayer) playerDie();
         else creditSolKill(ship);
       }
@@ -1305,7 +1296,6 @@
     if (d < 220 && diff < 0.28 && e.torpCd <= 0) {
       fireTorp(e, "enemy", e.ang, 340, 14 * (e.dmgMul || 1), 0.95);
       e.torpCd = 1.05 + Math.random() * 0.4;
-      audio.beep(180, 0.04, "square", 0.06);
     }
     if (d < 180 && diff < 0.5 && Math.random() < 0.012) {
       firePhaser(e, "enemy");
@@ -1606,7 +1596,7 @@
       p.fuel -= 20;
       p.hyperCd = 1.12;
       p.invuln = Math.max(p.invuln, 0.32);
-      burst(p.x, p.y, 12, "#6ec8ff", 60);
+      burst(p.x, p.y, 12, "#6ec8ff", 60, false);
       audio.warp(true);
       G.status = "HYPERJUMP";
     }
@@ -1615,7 +1605,6 @@
       fireTorp(p, "player", p.ang, 420, 20, 1.35);
       p.torpCd = 0.36;
       p.fuel = Math.max(0, p.fuel - 2.2);
-      audio.beep(420, 0.05, "square", 0.14);
       if (dock && dock.owner === ENEMY) bombard(dock, 20);
     }
     if ((just.x || just.g) ) {
@@ -2480,6 +2469,7 @@
     tickEnemyRespawn(sdt);
     updateProjectiles(sdt);
     maybeSpawnSolBoss();
+    solMusicThreat();
     updateCamera(dt);
     tickBubble(dt);
     if (G.earthWasFriend && G.map.earth.owner !== FRIEND) {
@@ -3409,17 +3399,21 @@
       var e = ev[i];
       if (e.i <= GX.lastEv) continue;
       GX.lastEv = e.i;
-      if (e.k === "ph") GX.fx.push({ k: "ph", x: e.x, y: e.y, ang: e.ang, t: 0.12 });
+      if (e.k === "ph") {
+        GX.fx.push({ k: "ph", x: e.x, y: e.y, ang: e.ang, t: 0.12 });
+        audio.sfxPhaserFire();
+      }
+      if (e.k === "torp") audio.sfxTorpFire();
       if (e.k === "boom") {
         spawnExplosion(GX.particles, e.x, e.y, "#ffe080", 0.85);
-        audio.noise(0.08, 0.1);
+        audio.sfxExplode(0.85);
       }
       if (e.k === "hop") audio.warp(true);
       if (e.k === "die") {
         spawnExplosion(GX.particles, e.x, e.y, e.B ? "#ffb020" : "#ff8060", e.B ? 1.35 : 1.15);
         GX.banner = (e.B ? "BOSS DESTROYED" : "SHIP LOST") + (e.n ? " — " + e.n + " ARMIES GONE" : "");
         GX.bannerT = 3;
-        audio.noise(0.25, 0.18);
+        audio.sfxExplode(e.B ? 1.35 : 1.15);
       }
       if (e.k === "boss") {
         GX.banner = "BOSS SHIP DETECTED";
@@ -3435,7 +3429,39 @@
   }
 
   function gxBurst(x, y, n, color, spd) {
-    spawnExplosion(GX.particles, x, y, color, Math.max(0.4, (n || 16) / 22));
+    var power = Math.max(0.4, (n || 16) / 22);
+    spawnExplosion(GX.particles, x, y, color, power);
+    audio.sfxExplode(power);
+  }
+
+  function solMusicThreat() {
+    if (!G || !G.player || !G.player.alive) {
+      audio.setThreat(0);
+      return;
+    }
+    var th = 0, i, e, d;
+    for (i = 0; i < G.enemies.length; i++) {
+      e = G.enemies[i];
+      if (!e.alive) continue;
+      d = dist(G.player.x, G.player.y, e.x, e.y);
+      if (d < 820) th = Math.max(th, 1 - d / 820);
+    }
+    audio.setThreat(th);
+  }
+
+  function gxMusicThreat(st, me) {
+    if (!me || !st || !st.sh) {
+      audio.setThreat(0);
+      return;
+    }
+    var th = 0, i, sh, d;
+    for (i = 0; i < st.sh.length; i++) {
+      sh = st.sh[i];
+      if (!sh.v || sh.r === me.r) continue;
+      d = dist(me.x, me.y, sh.x, sh.y);
+      if (d < 720) th = Math.max(th, 1 - d / 720);
+    }
+    audio.setThreat(th);
   }
 
   function gxMe(st) {
@@ -3590,6 +3616,7 @@
       if (nb) GX.targetId = nb.id;
     }
     GX.bannerT = Math.max(0, GX.bannerT - dt);
+    gxMusicThreat(st, me);
     gxDraw(dt, st, me);
     hudAcc += dt;
     if (hudAcc > 0.1) {
