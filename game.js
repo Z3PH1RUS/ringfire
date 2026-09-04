@@ -17,9 +17,11 @@
   var MUSIC_GAIN = 0.5;      /* procedural invader-pulse bed — clearly audible */
   var SFX_GAIN = 2;          /* sound effects 2× prior per-call levels */
   var PLANET_ZOOM = 1.3;     /* 30% camera zoom-in near a planet, ship centered */
-  var BASE_FUEL = 100;
+  var BASE_FUEL = 140;
   var BASE_SHIELDS = 80;
   var BASE_ENEMY_HULL = 58;
+  var START_MARINES = 20;
+  var CAPTURE_MARINES = 40;
 
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -607,7 +609,7 @@
     }
   }
 
-  function resetPlayer(g, atBody) {
+  function resetPlayer(g, atBody, firstSpawn) {
     var b = atBody || g.map.earth;
     var a = b.angle + 0.4;
     g.player = {
@@ -617,13 +619,13 @@
       warp: 1,
       hull: 100,
       maxHull: 100,
-      fuel: 100,
-      maxFuel: 100,
+      fuel: BASE_FUEL,
+      maxFuel: BASE_FUEL,
       shieldsOn: false,
       shields: 80,
       maxShields: 80,
-      armies: 0,
-      maxArmies: 18,
+      armies: firstSpawn ? START_MARINES : 0,
+      maxArmies: 28,
       missiles: 5,
       maxMissiles: 6,
       torpCd: 0,
@@ -683,7 +685,7 @@
       baseZoom: 1.15
     };
     spawnEnemies(g);
-    resetPlayer(g, map.earth);
+    resetPlayer(g, map.earth, true);
     g.camX = g.player.x;
     g.camY = g.player.y;
     G = g;
@@ -1092,6 +1094,46 @@
     }
   }
 
+  function completeCapture(b, winner, leftover) {
+    b.owner = winner;
+    b.armies = Math.max(1, leftover);
+    b.def = winner === FRIEND ? 2 : 3;
+    b.battle = null;
+    if (winner === FRIEND) {
+      G.banner = b.name + " LIBERATED";
+      G.bannerAlert = false;
+      audio.beep(520, 0.12, "square", 0.2);
+      audio.beep(740, 0.18, "square", 0.16);
+      if (b.capital) {
+        G.banner = "TITAN FALLS — THE MANDATE SEAT IS OURS";
+        bubbleEvent("You took their sofa. They will be irritating about it.");
+      } else {
+        bubbleEvent(pick(Math.random, [
+          "A world is a closet for armies. Fill it.",
+          "Good. Now do that eight more times.",
+          "Leave a garrison this time. I am begging in binary."
+        ]));
+      }
+    } else {
+      G.banner = b.name + " FALLS TO THE MANDATE";
+      G.bannerAlert = true;
+      audio.beep(160, 0.25, "sawtooth", 0.18, 70);
+      if (b.id === "earth") {
+        G.banner = "EARTH HAS FALLEN — THE INNER LINE IS BROKEN";
+        G.bannerT = 6;
+        bubbleEvent("Earth is gone. The war is not. Find a rock and bleed them.");
+      }
+    }
+    G.bannerT = Math.max(G.bannerT, 4);
+    checkOutcome();
+  }
+
+  function tryCaptureOverrun(b) {
+    if (!b.battle || b.battle.atk < CAPTURE_MARINES) return false;
+    completeCapture(b, b.battle.side, b.battle.atk);
+    return true;
+  }
+
   function startBattle(b, side, n) {
     if (n <= 0) return;
     if (!b.battle) {
@@ -1107,6 +1149,7 @@
         else b.battle = null;
       }
     }
+    tryCaptureOverrun(b);
   }
 
   function tickBattle(b, dt) {
@@ -1121,6 +1164,7 @@
     var defLoss = Math.max(1, Math.round(atk * 0.2));
     b.battle.atk = Math.max(0, atk - atkLoss);
     b.armies = Math.max(0, defN - defLoss);
+    if (tryCaptureOverrun(b)) return;
     if (b.armies <= 0 && b.battle.atk > 0) {
       /* fall through to capture */
     } else if (b.battle.atk <= 0) {
@@ -1131,39 +1175,7 @@
       return;
     }
     if (b.armies <= 0) {
-      var winner = b.battle.side;
-      var leftover = Math.max(1, b.battle.atk);
-      b.owner = winner;
-      b.armies = leftover;
-      b.def = winner === FRIEND ? 2 : 3;
-      b.battle = null;
-      if (winner === FRIEND) {
-        G.banner = b.name + " LIBERATED";
-        G.bannerAlert = false;
-        audio.beep(520, 0.12, "square", 0.2);
-        audio.beep(740, 0.18, "square", 0.16);
-        if (b.capital) {
-          G.banner = "TITAN FALLS — THE MANDATE SEAT IS OURS";
-          bubbleEvent("You took their sofa. They will be irritating about it.");
-        } else {
-          bubbleEvent(pick(Math.random, [
-            "A world is a closet for armies. Fill it.",
-            "Good. Now do that eight more times.",
-            "Leave a garrison this time. I am begging in binary."
-          ]));
-        }
-      } else {
-        G.banner = b.name + " FALLS TO THE MANDATE";
-        G.bannerAlert = true;
-        audio.beep(160, 0.25, "sawtooth", 0.18, 70);
-        if (b.id === "earth") {
-          G.banner = "EARTH HAS FALLEN — THE INNER LINE IS BROKEN";
-          G.bannerT = 6;
-          bubbleEvent("Earth is gone. The war is not. Find a rock and bleed them.");
-        }
-      }
-      G.bannerT = Math.max(G.bannerT, 4);
-      checkOutcome();
+      completeCapture(b, b.battle.side, b.battle.atk);
     }
   }
 
@@ -1260,12 +1272,12 @@
       audio.beep(640, 0.07, "square", 0.12);
       audio.beep(880, 0.08, "square", 0.1);
     } else if (b.owner === ENEMY) {
-      if (p.armies <= 0) { G.status = "NO ARMIES TO DROP"; return; }
+      if (p.armies <= 0) { G.status = "NO MARINES TO BEAM DOWN"; return; }
       var n2 = Math.min(4, p.armies);
       p.armies -= n2;
       startBattle(b, FRIEND, n2);
       p.beamCd = 0.28;
-      G.status = "DROP " + n2 + " ON " + b.name;
+      G.status = "BEAM DOWN " + n2 + " ON " + b.name;
       G.banner = "GROUND WAR — " + b.name;
       G.bannerT = 2.5;
       audio.beep(300, 0.08, "square", 0.12);
@@ -1981,7 +1993,7 @@
       "<h3>PLANETARY FILE</h3>" +
       "<div class='kv'><b>" + b.name + "</b>  " + b.kind.toUpperCase() + "</div>" +
       "<div class='kv'><b>OWNER</b> <span class='" + oc + "'>" + owner + "</span></div>" +
-      "<div class='kv'><b>ARMIES</b> " + (b.armies | 0) + " / " + b.cap + "</div>" +
+      "<div class='kv'><b>MARINES</b> " + (b.armies | 0) + " / " + b.cap + " (capture at " + CAPTURE_MARINES + ")</div>" +
       "<div class='kv'><b>GUNS</b> " + guns + "</div>" +
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       cap + battle +
@@ -2009,7 +2021,7 @@
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (p.warp > 0 ? p.warp : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(p.fuel, p.maxFuel, 10) + " " + Math.floor(p.fuel) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(p.hull, p.maxHull, 10) + " " + Math.floor(p.hull) + "</span><br><b>SHLD</b> <span class='" + shC + "'>" + sh + " " + bar(p.shields, p.maxShields, 8) + "</span></div>" +
-      "<div class='cell'><b>ARMIES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
+      "<div class='cell'><b>MARINES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
       "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span></div>";
     if (G.bannerT > 0) {
       el.banner.textContent = G.banner;
@@ -3803,9 +3815,9 @@
     var sc = st.sc || {};
     var own = sc[me.r] || 0;
     el.hud.innerHTML =
-      "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 100, 10) + " " + Math.floor(me.f) + "</span></div>" +
+      "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 140, 10) + " " + Math.floor(me.f) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(me.h, me.H || 100, 10) + " " + Math.floor(me.h) + "</span><br><b>SHLD</b> " + sh + " " + bar(me.S || 0, me.Q || 70, 8) + "</div>" +
-      "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "  <b>TIER</b> T" + (me.u || 0) + ((me.u || 0) ? " +" + (me.u * 10) + "%" : "") + "<br><b>ARMIES</b> " + me.m + "/" + me.M + "</div>" +
+      "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "  <b>TIER</b> T" + (me.u || 0) + ((me.u || 0) ? " +" + (me.u * 10) + "%" : "") + "<br><b>MARINES</b> " + me.m + "/" + me.M + "</div>" +
       "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span></div>";
     if (GX.bannerT > 0) {
       el.banner.textContent = GX.banner;
@@ -3836,7 +3848,7 @@
       "<h3>PLANETARY FILE</h3>" +
       "<div class='kv'><b>" + b.n + "</b>  " + (b.c ? "CLASS-M" : "ROCK") + (b.k ? "  SEAT" : "") + "</div>" +
       "<div class='kv'><b>OWNER</b> <span class='" + oc + "'>" + owner + "</span></div>" +
-      "<div class='kv'><b>ARMIES</b> " + b.m + "</div>" +
+      "<div class='kv'><b>MARINES</b> " + b.m + " (capture at 40)</div>" +
       "<div class='kv'><b>GUNS</b> " + (b.d || 0) + "</div>" +
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       battle +

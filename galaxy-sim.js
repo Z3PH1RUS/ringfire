@@ -12,27 +12,30 @@
   var MAX_CHAT = 10;
   var STALE_SEC = 12.0;
   var HOST_STALE_SEC = 18.0;
+  var BASE_FUEL = 140;
+  var START_MARINES = 20;
+  var CAPTURE_MARINES = 40;
 
   var RACES = {
     helios: {
       name: "HELIOS", color: "#e8d48a",
       speed: 1.00, hull: 100, phaser: 1.00, torp: 1.00,
-      fuel: 100, turn: 1.00, cx: 260, cy: 260
+      fuel: BASE_FUEL, turn: 1.00, cx: 260, cy: 260
     },
     veil: {
       name: "VEIL", color: "#3dcc5c",
       speed: 0.80, hull: 122, phaser: 1.42, torp: 1.38,
-      fuel: 112, turn: 0.86, cx: 260, cy: 1340
+      fuel: 157, turn: 0.86, cx: 260, cy: 1340
     },
     spark: {
       name: "SPARK", color: "#3ad4d4",
       speed: 1.34, hull: 78, phaser: 0.70, torp: 0.74,
-      fuel: 88, turn: 1.22, cx: 1340, cy: 260
+      fuel: 123, turn: 1.22, cx: 1340, cy: 260
     },
     mandate: {
       name: "MANDATE", color: "#e07038",
       speed: 0.98, hull: 106, phaser: 1.14, torp: 1.16,
-      fuel: 102, turn: 0.96, cx: 1340, cy: 1340
+      fuel: 143, turn: 0.96, cx: 1340, cy: 1340
     }
   };
   var RACE_ORDER = ["helios", "veil", "spark", "mandate"];
@@ -50,7 +53,7 @@
   }
   function angTo(ax, ay, bx, by) { return Math.atan2(by - ay, bx - ax); }
   function warpSpeed(w, mul, fuel) {
-    if (fuel == null) fuel = 100.0;
+    if (fuel == null) fuel = BASE_FUEL;
     if (w <= 0) return fuel <= 0 ? (7.0 * mul) : 0.0;
     return (12.0 + w * w * 1.05) * mul;
   }
@@ -436,7 +439,7 @@
     p.x = sp.x; p.y = sp.y; p.ang = sp.ang; p.warp = 0;
     p.hull = rs.hull; p.maxHull = rs.hull;
     p.fuel = rs.fuel; p.maxFuel = rs.fuel;
-    p.armies = 0; p.maxArmies = 16;
+    p.armies = first ? START_MARINES : 0; p.maxArmies = 28;
     p.shieldsOn = false; p.shields = 70; p.maxShields = 70;
     p.alive = true; p.spawnT = 0.0; p.flash = 0.0;
     p.invuln = first ? 2.2 : 1.8;
@@ -688,14 +691,25 @@
     }
   };
 
+  Game.prototype.capturePlanet = function (b, winner, leftover) {
+    b.owner = winner;
+    b.armies = Math.max(1, leftover | 0);
+    b.def = 3.0;
+    b.battle = null;
+    this.emit("cap", { pid: b.id, r: winner });
+    this.addChat("RINGFIRE", winner, b.name + " TAKEN BY " + RACES[winner].name);
+  };
+
+  Game.prototype.tryCaptureOverrun = function (b) {
+    if (!b.battle || b.battle.atk < CAPTURE_MARINES) return false;
+    this.capturePlanet(b, b.battle.side, b.battle.atk);
+    return true;
+  };
+
   Game.prototype.startBattle = function (b, side, n) {
     if (n <= 0) return;
     if (b.armies <= 0 && !b.battle) {
-      b.owner = side;
-      b.armies = n;
-      b.def = 2.5;
-      this.emit("cap", { pid: b.id, r: side });
-      this.addChat("RINGFIRE", side, b.name + " TAKEN BY " + RACES[side].name);
+      this.capturePlanet(b, side, n);
       return;
     }
     if (!b.battle) {
@@ -708,6 +722,7 @@
       n -= clash;
       if (b.battle.atk <= 0) b.battle = n > 0 ? { side: side, atk: n, t: 0.0 } : null;
     }
+    this.tryCaptureOverrun(b);
   };
 
   Game.prototype.tickBattle = function (b, dt) {
@@ -722,6 +737,7 @@
     var defLoss = Math.max(1, Math.round(atk * 0.2));
     b.battle.atk = Math.max(0, atk - atkLoss);
     b.armies = Math.max(0, defN - defLoss);
+    if (this.tryCaptureOverrun(b)) return;
     if (b.armies <= 0 && b.battle.atk > 0) {
       /* fall through to capture */
     } else if (b.battle.atk <= 0) {
@@ -730,14 +746,7 @@
       return;
     }
     if (b.armies <= 0) {
-      var winner = b.battle.side;
-      var leftover = Math.max(1, b.battle.atk);
-      b.owner = winner;
-      b.armies = leftover;
-      b.def = 3.0;
-      b.battle = null;
-      this.emit("cap", { pid: b.id, r: winner });
-      this.addChat("RINGFIRE", winner, b.name + " TAKEN BY " + RACES[winner].name);
+      this.capturePlanet(b, b.battle.side, b.battle.atk);
     }
   };
 
@@ -1173,8 +1182,8 @@
         x: r1(p.x || 0), y: r1(p.y || 0),
         a: r2(p.ang || 0), w: (p.warp || 0) | 0,
         h: r1(p.hull || 0), H: (p.maxHull || 100) | 0,
-        f: r1(p.fuel || 0), F: (p.maxFuel || 100) | 0,
-        m: (p.armies || 0) | 0, M: (p.maxArmies || 16) | 0,
+        f: r1(p.fuel || 0), F: (p.maxFuel || BASE_FUEL) | 0,
+        m: (p.armies || 0) | 0, M: (p.maxArmies || 28) | 0,
         s: p.shieldsOn ? 1 : 0,
         S: r1(p.shields || 0),
         v: p.alive ? 1 : 0,

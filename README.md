@@ -58,19 +58,21 @@ Five-spot die. Homes in the four corners (three adjacent planets each, **50 armi
 
 Class-M (all homes + Axis): orbiting a friendly Class-M refuels much faster. Defenders can dump a photon blizzard; attackers hop in and detonate the pile.
 
-**Win:** your race owns all 25. **Eliminated:** your race owns zero planets — no respawn. Armies aboard are lost on death. Respawn in a home system you still own, or a home system your team has conquered, or any owned world.
+**Win:** your race owns all 25. **Eliminated:** your race owns zero planets — no respawn. Marines aboard are lost on death. First spawn: **20 marines** and **140 fuel** (Helios baseline; other races scale). Respawn: empty hold. Respawn in a home system you still own, or a home system your team has conquered, or any owned world.
 
-Owned planets slowly grow armies (neutrals barely).
+Owned planets slowly grow garrisons (neutrals barely).
+
+**Capture:** beam marines down until **40 attacking marines** are on a hostile/neutral world (or wipe the garrison). Orbit proximity required for beam up/down.
 
 ## Pitch (SOL)
-One ship, nine planets, moving moons, and a clock. The Mandate holds Titan. Retake every planet.
+One ship, nine planets, moving moons, and a clock. The Mandate holds Titan. Retake every planet. RF-1 starts with **140 fuel** and **20 marines** (respawn: empty hold).
 
 ## How to play
-1. Load armies from a friendly world (`B` in orbit — a garrison stays behind).
+1. Load marines from a friendly world (`B` in orbit — beam up; a garrison stays behind).
 2. Warp (`1`–`9`). In SOL, keys also jump you toward numbered system bodies from habit; in GALAXY they only set warp.
 3. **Phasers** (`F` / `C` / right-click) for a cone in front. **Photons** (`SPACE`) travel and can be dodged (max 6 in flight). **Detonate** your own photons (`X` or `G`) for area damage.
 4. **Hop** (`H`) — short burst along your nose, high fuel, brief invulnerability. Lead it or detonate into the landing.
-5. Bombard a hostile disc until guns die, then `B`eam armies down. Ground war resolves over a few seconds.
+5. Bombard a hostile disc until guns die, then `B` beam marines down. **40 attacking marines** on the world captures it (or wipe the garrison). Ground war resolves over a few seconds.
 6. Refuel is **automatic** in safe friendly orbit (Class-M in GALAXY is much faster). `U` extra dump. `R` repair.
 
 SOL: the Mandate also invades. You lose when no friendly planets remain. Win: all nine planets friendly. Fastest time → hall of fame.
@@ -95,7 +97,7 @@ HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/3
 | `H` | Hyperjump / hop |
 | `T` | Tracking missile (**SOL only**) |
 | `S` | Shields on/off (drains fuel) |
-| `B` | Beam armies up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
+| `B` | Beam marines up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
 | `U` | Extra refuel in friendly orbit (auto-refuel already runs there) |
 | `R` | Repair hull (friendly orbit, costs fuel) |
 | `[` `]` or `,` `.` | Radar zoom |
@@ -112,7 +114,7 @@ On a phone, on-screen buttons cover rotate, fire, phaser, detonate, hop, missile
 ## Ship
 - Dart-class hull. In GALAXY the dart is recolored by race so teams read in a dogfight. IFF is color + letter (H/V/S/M). Teammates get a ring.
 - Fuel 0 → impulse crawl until you dock a friendly world.
-- Hull 0 → destroyed. Armies/personnel aboard are **lost forever**.
+- Hull 0 → destroyed. Marines aboard are **lost forever** (first launch: 20 marines).
 - Photons and phasers cost fuel. Space regen is slow. Class-M orbit is the gas station.
 
 ## Default SOL political map
