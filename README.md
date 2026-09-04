@@ -67,10 +67,10 @@ One ship, nine planets, moving moons, and a clock. The Mandate holds Titan. Reta
 
 ## How to play
 1. Load armies from a friendly world (`B` in orbit — a garrison stays behind).
-2. Warp (`1`–`9`). In SOL, keys also jump you toward numbered system bodies from habit; in GALAXY they only set warp. Near any planet you auto-enter orbit; break out with `H` or any warp key.
+2. Warp (`1`–`9`). In SOL, keys also jump you toward numbered system bodies from habit; in GALAXY they only set warp. Near any planet you auto-enter orbit; break out with `A`/`D`, `H`, or any warp key (A/D is free — no fuel).
 3. **Phasers** (`F` / `C` / right-click) for a cone in front. **Photons** (`SPACE`) travel and can be dodged (max 6 in flight). **Detonate** your own photons (`X` or `G`) for area damage.
 4. **Hop** (`H`) — short burst along your nose, high fuel, brief invulnerability. Also **breaks auto-orbit**. Lead it or detonate into the landing.
-5. Bombard a hostile disc until guns die, then `B`eam armies down. Ground war resolves over a few seconds.
+5. Bombard a hostile disc until guns die, then `B`eam marines down. **20 marines** aboard at launch; **60 on the ground** captures the world.
 6. Refuel is **automatic** in safe friendly orbit (Class-M in GALAXY is much faster). `U` extra dump. `R` repair.
 
 SOL: the Mandate also invades. You lose when no friendly planets remain. Win: all nine planets friendly. Fastest time → hall of fame.
@@ -78,24 +78,25 @@ SOL: the Mandate also invades. You lose when no friendly planets remain. Win: al
 GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short room chat.
 
 ## Combat feel
-Explosions use particles, shock rings, and debris (about 30% larger than before). Near a planet the client camera zooms in 50% with the ship centered, then eases out. Approach a planet and you auto-enter orbit until you break out with `H` or warp. Twenty asteroids tumble at warp-6 speed; planet gravity pulls them; unshielded hits destroy your ship. Warp and hyper-hop play a short Web Audio whoosh. The whole fight runs about 40% slower than the prior release (on top of the earlier pace reduction).
+Explosions use multi-layer particles, shock rings, debris, and glow (cinematic, performant). Near a planet the client camera zooms in 50% with the ship centered, then eases out. Approach a planet and you auto-enter orbit until you break out with `A`/`D`, `H`, or warp. Twenty asteroids tumble at warp-6 speed; planet gravity pulls them; unshielded hits destroy your ship. Procedural Web Audio: cinematic ambient loop plus warp/hyper whoosh (SFX ~2× prior loudness; `N` mutes all). The whole fight runs about 40% slower than the prior release (on top of the earlier pace reduction).
 
-## Score and upgrades
-HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/30/40/50 kills your max energy and shields are 10/20/30/40/50% above the ship baseline (not stacked on the previous bonus). A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score/upgrades are per player; the host spawns bosses.
+## Score and bosses
+HUD always shows **SCORE** (1 per enemy ship destroyed). Kill-score **no longer** raises max fuel or shields. A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score is per player; the host spawns bosses.
 
 ## Controls
 | Key | Action |
 | --- | --- |
-| `←` `→` or `A` `D` | Rotate |
+| `←` `→` or `A` `D` | Rotate; **also breaks auto-orbit** (no fuel) |
 | `1`–`9` | Set warp |
 | `+` `-` | Warp up / down |
 | `SPACE` | Photon torpedo (hold to repeat). Hits ships, or bombards a hostile disc. Limited in flight. |
 | `F` / `C` / right-click | Phasers (cone, instant, costs fuel) |
 | `X` / `G` | Detonate your photons (AoE) |
 | `H` | Hyperjump / hop (also breaks auto-orbit) |
+| `N` | Mute SFX + ambient music |
 | `T` | Tracking missile (**SOL only**) |
 | `S` | Shields on/off (drains fuel) |
-| `B` | Beam armies up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
+| `B` | Beam marines up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
 | `U` | Extra refuel in friendly orbit (auto-refuel already runs there) |
 | `R` | Repair hull (friendly orbit, costs fuel) |
 | `[` `]` or `,` `.` | Radar zoom |
@@ -104,15 +105,14 @@ HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/3
 | Click | Lock planetary info sheet |
 | `L` | Clear target lock |
 | `P` / `ESC` | Pause (**SOL**) |
-| `N` | Mute |
 | `K` | Toggle Bubble (optional ship-computer one-liners; never blocks play) |
 
 On a phone, on-screen buttons cover rotate, fire, phaser, detonate, hop, missile, warp, beam, shields, and map (SOL).
 
 ## Ship
 - Dart-class hull. In GALAXY the dart is recolored by race so teams read in a dogfight. IFF is color + letter (H/V/S/M). Teammates get a ring.
-- Fuel 0 → impulse crawl until you dock a friendly world.
-- Hull 0 → destroyed. Armies/personnel aboard are **lost forever**.
+- **130 fuel** at launch (max baseline). Fuel 0 → **limp warp 2** (keys `1`–`2`, no burn) until you dock a friendly world.
+- Hull 0 → destroyed. Marines aboard are **lost forever** on death (20 marines at first launch only).
 - Photons and phasers cost fuel. Space regen is slow. Class-M orbit is the gas station.
 
 ## Default SOL political map

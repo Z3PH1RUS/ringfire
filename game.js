@@ -17,9 +17,14 @@
   var PLANET_ZOOM = 1.5;     /* 50% camera zoom-in near a planet, ship centered */
   var MAX_ASTEROIDS = 20;
   var ASTEROID_R = 10.5;     /* rocky bodies ~50% larger than dart ship */
-  var BASE_FUEL = 100;
+  var BASE_FUEL = 130;
   var BASE_SHIELDS = 80;
   var BASE_ENEMY_HULL = 58;
+  var START_MARINES = 20;
+  var CAPTURE_MARINES = 60;
+  var MAX_MARINES = 64;
+  var SFX_GAIN = 2.0;
+  var LIMP_WARP = 2;
 
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -130,25 +135,33 @@
     "A moon is a planet that learned to orbit someone else's problem."
   ];
 
-  /* ---------- audio (optional; fully silent is fine) ---------- */
+  /* ---------- audio (procedural SFX + ambient loop; no external assets) ---------- */
   var audio = {
     ctx: null,
     muted: false,
     enabled: true,
     master: null,
+    musicGain: null,
+    musicNodes: null,
+    musicTimer: null,
     init: function () {
       if (this.ctx) return;
       var AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) { this.enabled = false; return; }
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.12;
+      this.master.gain.value = 0.14;
       this.master.connect(this.ctx.destination);
+      this.musicGain = this.ctx.createGain();
+      this.musicGain.gain.value = 0.055;
+      this.musicGain.connect(this.master);
     },
     resume: function () {
       this.init();
       if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+      this.startMusic();
     },
+    sfxVol: function (vol) { return Math.min(0.42, (vol || 0.2) * 0.8 * SFX_GAIN); },
     beep: function (freq, dur, type, vol, slide) {
       if (this.muted || !this.enabled) return;
       this.init();
@@ -159,7 +172,7 @@
       o.type = type || "square";
       o.frequency.setValueAtTime(freq, t);
       if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, slide), t + dur);
-      g.gain.setValueAtTime((vol || 0.2) * 0.8, t);
+      g.gain.setValueAtTime(this.sfxVol(vol), t);
       g.gain.exponentialRampToValueAtTime(0.001, t + dur);
       o.connect(g); g.connect(this.master);
       o.start(t); o.stop(t + dur + 0.02);
@@ -174,7 +187,7 @@
       s.buffer = buf;
       var g = this.ctx.createGain();
       var t = this.ctx.currentTime;
-      g.gain.setValueAtTime(vol || 0.15, t);
+      g.gain.setValueAtTime(this.sfxVol(vol), t);
       g.gain.exponentialRampToValueAtTime(0.001, t + dur);
       s.connect(g); g.connect(this.master);
       s.start();
@@ -192,6 +205,92 @@
         this.beep(90, 0.34, "sawtooth", 0.15, 480);
         this.beep(200, 0.18, "triangle", 0.1, 80);
       }
+    },
+    stopMusic: function () {
+      if (this.musicTimer) { clearTimeout(this.musicTimer); this.musicTimer = null; }
+      if (this.musicNodes) {
+        var i, nd;
+        for (i = 0; i < this.musicNodes.length; i++) {
+          nd = this.musicNodes[i];
+          try { if (nd.stop) nd.stop(0); if (nd.disconnect) nd.disconnect(); } catch (e) {}
+        }
+        this.musicNodes = null;
+      }
+    },
+    startMusic: function () {
+      if (this.muted || !this.enabled) return;
+      this.init();
+      if (!this.ctx || this.musicNodes) return;
+      var ctx = this.ctx, t0 = ctx.currentTime + 0.05, nodes = [], self = this;
+      function tone(freq, type, vol, detune) {
+        var o = ctx.createOscillator();
+        var g = ctx.createGain();
+        o.type = type || "sine";
+        o.frequency.value = freq;
+        if (detune) o.detune.value = detune;
+        g.gain.value = vol;
+        o.connect(g); g.connect(self.musicGain);
+        o.start(t0);
+        nodes.push(o, g);
+        return { o: o, g: g };
+      }
+      function lfo(rate, depth, target, base) {
+        var l = ctx.createOscillator();
+        var lg = ctx.createGain();
+        l.frequency.value = rate;
+        lg.gain.value = depth;
+        l.connect(lg); lg.connect(target.frequency || target.gain);
+        l.start(t0);
+        nodes.push(l, lg);
+        if (base != null && target.frequency) target.frequency.value = base;
+      }
+      var padA = tone(55, "sine", 0.22);
+      var padB = tone(82.5, "triangle", 0.14, 7);
+      var padC = tone(110, "sine", 0.08, -5);
+      lfo(0.04, 4, padA.o, 55);
+      lfo(0.06, 6, padB.o, 82.5);
+      var n = Math.floor(ctx.sampleRate * 4);
+      var nb = ctx.createBuffer(1, n, ctx.sampleRate);
+      var nd = nb.getChannelData(0);
+      for (var i = 0; i < n; i++) nd[i] = (Math.random() * 2 - 1) * 0.35;
+      var ns = ctx.createBufferSource();
+      ns.buffer = nb; ns.loop = true;
+      var nf = ctx.createBiquadFilter();
+      nf.type = "lowpass"; nf.frequency.value = 420; nf.Q.value = 0.6;
+      var ng = ctx.createGain(); ng.gain.value = 0.045;
+      ns.connect(nf); nf.connect(ng); ng.connect(self.musicGain);
+      ns.start(t0);
+      nodes.push(ns, nf, ng);
+      lfo(0.018, 120, nf, 420);
+      var motif = [0, 3, 5, 7, 5, 3, 0, -2];
+      var motifIdx = 0;
+      function playMotif() {
+        if (!self.musicNodes || self.muted) return;
+        var st = motif[motifIdx % motif.length];
+        motifIdx++;
+        var f = 220 * Math.pow(2, st / 12);
+        var o = ctx.createOscillator();
+        var g = ctx.createGain();
+        var fl = ctx.createBiquadFilter();
+        o.type = "triangle";
+        o.frequency.value = f;
+        fl.type = "lowpass"; fl.frequency.value = 900;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.linearRampToValueAtTime(0.07, ctx.currentTime + 1.8);
+        g.gain.linearRampToValueAtTime(0.0001, ctx.currentTime + 7.5);
+        o.connect(fl); fl.connect(g); g.connect(self.musicGain);
+        o.start(ctx.currentTime);
+        o.stop(ctx.currentTime + 7.6);
+        nodes.push(o, g, fl);
+        self.musicTimer = setTimeout(playMotif, 8200 + Math.random() * 2400);
+      }
+      self.musicNodes = nodes;
+      self.musicTimer = setTimeout(playMotif, 1200);
+    },
+    setMuted: function (on) {
+      this.muted = !!on;
+      if (this.muted) this.stopMusic();
+      else this.startMusic();
     }
   };
 
@@ -411,7 +510,7 @@
     }
   }
 
-  function resetPlayer(g, atBody) {
+  function resetPlayer(g, atBody, startMarines) {
     var b = atBody || g.map.earth;
     var a = b.angle + 0.4;
     g.player = {
@@ -421,13 +520,13 @@
       warp: 1,
       hull: 100,
       maxHull: 100,
-      fuel: 100,
-      maxFuel: 100,
+      fuel: BASE_FUEL,
+      maxFuel: BASE_FUEL,
       shieldsOn: false,
-      shields: 80,
-      maxShields: 80,
-      armies: 0,
-      maxArmies: 18,
+      shields: BASE_SHIELDS,
+      maxShields: BASE_SHIELDS,
+      armies: startMarines ? START_MARINES : 0,
+      maxArmies: MAX_MARINES,
       missiles: 5,
       maxMissiles: 6,
       torpCd: 0,
@@ -446,7 +545,6 @@
       orbitDist: 0,
       orbitSpd: 0
     };
-    applyPlayerUpgrades(g);
   }
 
   function newGame(opts) {
@@ -491,7 +589,7 @@
       baseZoom: 1.15
     };
     spawnEnemies(g);
-    resetPlayer(g, map.earth);
+    resetPlayer(g, map.earth, true);
     initAsteroids(g);
     g.camX = g.player.x;
     g.camY = g.player.y;
@@ -559,7 +657,15 @@
     ship.orbitDist = clamp(bd, orbitBand(best) + 8, orbitBand(best) + 22);
     ship.orbitSpd = warpSpeed(3) / Math.max(ship.orbitDist, best.r + 10);
     ship.warp = 0;
-    G.status = "AUTO ORBIT — " + best.name + "  (H or warp breaks)";
+    G.status = "AUTO ORBIT — " + best.name + "  (A/D, H, or warp breaks)";
+  }
+  function movementBreakOrbit(ship) {
+    if (!ship || !ship.orbitLock) return false;
+    if (keys.arrowleft || keys.a || keys.arrowright || keys.d) {
+      breakOrbit(ship, "ORBIT BROKEN — THRUST");
+      return true;
+    }
+    return false;
   }
   function updateAutoOrbit(ship, dt) {
     var b = orbitBody(ship);
@@ -569,8 +675,6 @@
     ship.x = b.x + Math.cos(ship.orbitAng) * ship.orbitDist;
     ship.y = b.y + Math.sin(ship.orbitAng) * ship.orbitDist;
     ship.ang = ship.orbitAng + Math.PI * 0.5;
-    if (keys.arrowleft || keys.a) ship.ang -= turnRate(0) * dt;
-    if (keys.arrowright || keys.d) ship.ang += turnRate(0) * dt;
     return true;
   }
   function asteroidSpeed() {
@@ -762,27 +866,33 @@
   }
   function spawnExplosion(list, x, y, color, power) {
     power = power == null ? 1 : power;
-    var blast = BLAST_SCALE;
-    var i, a, s, life, n, nd;
-    n = Math.floor(22 * power);
+    var blast = BLAST_SCALE * 1.15;
+    var i, a, s, life, n, nd, ringT;
+    n = Math.floor(34 * power);
     for (i = 0; i < n; i++) {
       a = Math.random() * TAU;
-      s = (12 + Math.random() * 78) * blast * (0.7 + 0.3 * power);
-      life = 0.55 + Math.random() * 0.75;
-      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, color, (1.6 + Math.random() * 2.6) * blast, { kind: "spark" });
+      s = (14 + Math.random() * 95) * blast * (0.65 + 0.35 * power);
+      life = 0.65 + Math.random() * 1.05;
+      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, color, (1.8 + Math.random() * 3.2) * blast, { kind: "spark" });
     }
-    nd = Math.floor(9 * power);
+    nd = Math.floor(14 * power);
     for (i = 0; i < nd; i++) {
       a = Math.random() * TAU;
-      s = (8 + Math.random() * 38) * blast;
-      life = 0.95 + Math.random() * 0.95;
-      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, Math.random() < 0.45 ? "#c8a070" : color, (2.2 + Math.random() * 3.2) * blast, {
-        kind: "debris", rot: Math.random() * TAU, spin: (Math.random() - 0.5) * 9
+      s = (10 + Math.random() * 48) * blast;
+      life = 1.15 + Math.random() * 1.25;
+      addParticle(list, x, y, Math.cos(a) * s, Math.sin(a) * s, life, Math.random() < 0.4 ? "#c8a070" : color, (2.4 + Math.random() * 4) * blast, {
+        kind: "debris", rot: Math.random() * TAU, spin: (Math.random() - 0.5) * 11
       });
     }
-    addParticle(list, x, y, 0, 0, 0.32, "#fff6d0", 18 * blast * power, { kind: "flash" });
-    addParticle(list, x, y, 0, 0, 0.52, "#ffe8a0", 2, { kind: "ring", r0: 4, r1: 44 * blast * power, lw: 2.4 });
-    addParticle(list, x, y, 0, 0, 0.82, color, 2, { kind: "ring", r0: 8, r1: 62 * blast * power, lw: 1.35 });
+    for (i = 0; i < 3; i++) {
+      ringT = 0.42 + i * 0.22;
+      addParticle(list, x, y, 0, 0, ringT + 0.35, i === 0 ? "#fff8e8" : color, 2, {
+        kind: "ring", r0: 6 + i * 4, r1: (38 + i * 28) * blast * power, lw: 2.8 - i * 0.5
+      });
+    }
+    addParticle(list, x, y, 0, 0, 0.38, "#ffffff", 22 * blast * power, { kind: "flash" });
+    addParticle(list, x, y, 0, 0, 0.55, "#ffe8a0", 16 * blast * power, { kind: "flash" });
+    addParticle(list, x, y, 0, 0, 0.95, color, 2, { kind: "ring", r0: 10, r1: 78 * blast * power, lw: 1.1 });
   }
   function burst(x, y, n, color, spd) {
     spawnExplosion(G.particles, x, y, color, Math.max(0.4, (n || 18) / 22));
@@ -829,29 +939,14 @@
     }
     ctx.globalAlpha = 1;
   }
-  function solUpgradeMul() {
-    return 1 + Math.min(5, Math.floor(((G && G.score) || 0) / 10)) * 0.1;
-  }
   function applyPlayerUpgrades(g) {
-    if (!g || !g.player) return;
-    var p = g.player;
-    var tier = Math.min(5, Math.floor((g.score || 0) / 10));
-    g.upgradeTier = tier;
-    var mul = 1 + tier * 0.1;
-    var nf = BASE_FUEL * mul;
-    var ns = BASE_SHIELDS * mul;
-    var df = nf - (p.maxFuel || BASE_FUEL);
-    var ds = ns - (p.maxShields || BASE_SHIELDS);
-    p.maxFuel = nf;
-    p.maxShields = ns;
-    if (df > 0) p.fuel = Math.min(p.maxFuel, p.fuel + df);
-    if (ds > 0) p.shields = Math.min(p.maxShields, p.shields + ds);
+    if (!g) return;
+    g.upgradeTier = 0;
   }
   function creditSolKill(en) {
     if (!G || !en || en._scored) return;
     en._scored = true;
     G.score = (G.score || 0) + 1;
-    applyPlayerUpgrades(G);
   }
   function maybeSpawnSolBoss() {
     var need = ((G.bossesSpawned || 0) + 1) * 50;
@@ -1062,10 +1157,12 @@
         else b.battle = null;
       }
     }
+    if (b.battle && b.battle.atk >= CAPTURE_MARINES) b.armies = 0;
   }
 
   function tickBattle(b, dt) {
     if (!b.battle) return;
+    if (b.battle.atk >= CAPTURE_MARINES) b.armies = 0;
     b.battle.t += dt;
     if (b.battle.t < 0.45) return;
     b.battle.t = 0;
@@ -1491,12 +1588,13 @@
 
     if (p.fuel <= 0) {
       p.fuel = 0;
-      p.warp = 0;
+      if (p.warp > LIMP_WARP) p.warp = LIMP_WARP;
       p.shieldsOn = false;
-      G.status = "FUEL ZERO — IMPULSE ONLY";
+      G.status = p.warp > 0 ? "FUEL ZERO — LIMP WARP " + LIMP_WARP : "FUEL ZERO — LIMP WARP " + LIMP_WARP + " (KEY 1–2)";
     }
 
     if (just.h && p.orbitLock) breakOrbit(p, "ORBIT BROKEN — HYPERJUMP");
+    movementBreakOrbit(p);
 
     if (!p.orbitLock) tryCaptureOrbit(p);
 
@@ -1507,7 +1605,7 @@
       p.y += Math.sin(p.ang) * sp * dt;
     }
 
-    var burn = fuelBurn(p.warp, p.shieldsOn);
+    var burn = p.fuel > 0 ? fuelBurn(p.warp, p.shieldsOn) : 0;
     p.fuel -= burn * dt;
     if (p.fuel < 0) p.fuel = 0;
     if (p.shieldsOn) {
@@ -1961,7 +2059,7 @@
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       cap + battle +
       "<div class='fact'>" + b.fact + "</div>" +
-      "<div class='fact' style='margin-top:14px;color:#6a9a6a'>CLICK BODY TO LOCK<br>H or warp breaks auto-orbit<br>[ / ] RADAR ZOOM<br>M SYSTEM MAP</div>";
+      "<div class='fact' style='margin-top:14px;color:#6a9a6a'>CLICK BODY TO LOCK<br>A/D, H, or warp breaks auto-orbit<br>[ / ] RADAR ZOOM<br>M SYSTEM MAP</div>";
   }
 
   function bar(n, max, w) {
@@ -1984,8 +2082,8 @@
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (p.warp > 0 ? p.warp : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(p.fuel, p.maxFuel, 10) + " " + Math.floor(p.fuel) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(p.hull, p.maxHull, 10) + " " + Math.floor(p.hull) + "</span><br><b>SHLD</b> <span class='" + shC + "'>" + sh + " " + bar(p.shields, p.maxShields, 8) + "</span></div>" +
-      "<div class='cell'><b>ARMIES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
-      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span></div>";
+      "<div class='cell'><b>MARINES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
+      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span></div>";
     if (G.bannerT > 0) {
       el.banner.textContent = G.banner;
       el.banner.className = G.bannerAlert ? "alert" : "";
@@ -2116,7 +2214,12 @@
     else if (act === "how") showScreen("how");
     else if (act === "hof") { renderHof(); showScreen("hof"); }
     else if (act === "bubble") { settings.bubble = !settings.bubble; saveSettings(); refreshTitleMenu(); }
-    else if (act === "mute") { settings.muted = !settings.muted; audio.muted = settings.muted; saveSettings(); refreshTitleMenu(); }
+    else if (act === "mute") {
+      settings.muted = !settings.muted;
+      audio.setMuted(settings.muted);
+      saveSettings();
+      refreshTitleMenu();
+    }
   }
 
 
@@ -2186,7 +2289,7 @@
       }
       if (k === "n") {
         settings.muted = !settings.muted;
-        audio.muted = settings.muted;
+        audio.setMuted(settings.muted);
         saveSettings();
         if (G) G.status = settings.muted ? "AUDIO OFF" : "AUDIO ON";
       }
@@ -2210,11 +2313,12 @@
   function applyWarpKeys(k) {
     if (!G || !G.player || !G.player.alive) return;
     var prevW = G.player.warp;
+    var maxW = G.player.fuel > 0 ? 9 : LIMP_WARP;
     if (k >= "1" && k <= "9") {
-      if (G.player.fuel > 0) G.player.warp = parseInt(k, 10);
+      G.player.warp = Math.min(parseInt(k, 10), maxW);
     }
     if (k === "=" || k === "+") {
-      if (G.player.fuel > 0) G.player.warp = Math.min(9, G.player.warp + 1);
+      G.player.warp = Math.min(maxW, G.player.warp + 1);
     }
     if (k === "-" || k === "_") {
       G.player.warp = Math.max(0, G.player.warp - 1);
@@ -3450,13 +3554,21 @@
     }
   }
 
+  function gxMeFuel() {
+    var st = GX.snap, i;
+    if (!st || !st.sh || !GX.id) return BASE_FUEL;
+    for (i = 0; i < st.sh.length; i++) if (st.sh[i].id === GX.id) return st.sh[i].f || 0;
+    return BASE_FUEL;
+  }
+
   function gxOnKey(e) {
     var k = keyName(e);
     if (["arrowup", "arrowdown", "arrowleft", "arrowright", "space"].indexOf(k) >= 0) e.preventDefault();
     if (k === "enter") { gxOpenChat(); e.preventDefault(); return true; }
     var prevW = GX.warp;
-    if (k >= "1" && k <= "9") GX.warp = parseInt(k, 10);
-    if (k === "=" || k === "+") GX.warp = Math.min(9, GX.warp + 1);
+    var maxW = gxMeFuel() > 0 ? 9 : LIMP_WARP;
+    if (k >= "1" && k <= "9") GX.warp = Math.min(parseInt(k, 10), maxW);
+    if (k === "=" || k === "+") GX.warp = Math.min(maxW, GX.warp + 1);
     if (k === "-" || k === "_") GX.warp = Math.max(0, GX.warp - 1);
     if (GX.warp !== prevW && GX.warp > 0) audio.warp(false);
     if (!GX.mapOpen) {
@@ -3466,7 +3578,7 @@
     }
     if (k === "m") GX.mapOpen = !GX.mapOpen;
     if (k === "l") GX.targetLock = false;
-    if (k === "n") { settings.muted = !settings.muted; audio.muted = settings.muted; saveSettings(); }
+    if (k === "n") { settings.muted = !settings.muted; audio.setMuted(settings.muted); saveSettings(); }
     if (k === "escape") { /* no pause on host clock */ }
     return true;
   }
@@ -3749,7 +3861,7 @@
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 100, 10) + " " + Math.floor(me.f) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(me.h, me.H || 100, 10) + " " + Math.floor(me.h) + "</span><br><b>SHLD</b> " + sh + " " + bar(me.S || 0, me.Q || 70, 8) + "</div>" +
-      "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "  <b>TIER</b> T" + (me.u || 0) + ((me.u || 0) ? " +" + (me.u * 10) + "%" : "") + "<br><b>ARMIES</b> " + me.m + "/" + me.M + "</div>" +
+      "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "<br><b>MARINES</b> " + me.m + "/" + me.M + "</div>" +
       "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span></div>";
     if (GX.bannerT > 0) {
       el.banner.textContent = GX.banner;
@@ -3785,7 +3897,7 @@
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       battle +
       "<div class='fact' style='margin-top:12px'>" + score + "</div>" +
-      "<div class='fact' style='margin-top:12px;color:#6a9a6a'>SPACE photons  F phasers<br>X detonate  H hop/break orbit  B beam<br>U refuel  M map  Enter chat</div>";
+      "<div class='fact' style='margin-top:12px;color:#6a9a6a'>SPACE photons  F phasers<br>X detonate  H hop/break orbit  B beam<br>A/D break orbit  U refuel  M map  Enter chat</div>";
   }
 
   function gxChatPaint(st) {

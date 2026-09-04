@@ -485,7 +485,7 @@
       Two modes. SOL: one ship vs the Mandate in this solar system (works from a local file, no network).<br>
       GALAXY: internet rooms on two computers — CREATE ROOM, share the 5-character code, JOIN ROOM. Live:
       <b>https://z3ph1rus.github.io/ringfire/</b><br>
-      Keyboard: rotate · 1–9 warp · SPACE photons · F phasers · X detonate · H hop · B beam · M map.
+      Keyboard: rotate · 1–9 warp · SPACE photons · F phasers · X detonate · H hop · B beam · N mute/music.
     </div>
     <div id="lanNote">GALAXY: two computers, same URL. CREATE ROOM on one, JOIN ROOM with the code on the other. Live: https://z3ph1rus.github.io/ringfire/</div>
     <div class="bubble-line" id="titleBubble"></div>
@@ -497,10 +497,10 @@
     <p>You command RF-1, last dart of the inner worlds. The Mandate — seated on Titan, moon of Saturn — occupies the outer system. Retake every planet. Moons are bases and army wells; they do not have to fall for victory, but they will decide the war.</p>
     <p style="margin-top:10px"><b style="color:var(--amber);font-weight:normal;">FLIGHT</b></p>
     <ul>
-      <li><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> rotate. Ship flies along its nose at current warp.</li>
-      <li>Near a planet you <b>auto-enter orbit</b> and circle it. Break out with <kbd>H</kbd> (hyper-hop) or any warp key (<kbd>1</kbd>–<kbd>9</kbd>, <kbd>+</kbd>/<kbd>-</kbd>).</li>
+      <li><kbd>←</kbd> <kbd>→</kbd> or <kbd>A</kbd> <kbd>D</kbd> rotate. Ship flies along its nose at current warp. <b>A/D also break auto-orbit</b> (free — no fuel).</li>
+      <li>Near a planet you <b>auto-enter orbit</b> and circle it. Break out with <kbd>A</kbd>/<kbd>D</kbd>, <kbd>H</kbd> (hyper-hop), or any warp key (<kbd>1</kbd>–<kbd>9</kbd>, <kbd>+</kbd>/<kbd>-</kbd>).</li>
       <li><kbd>1</kbd>–<kbd>9</kbd> set warp. <kbd>+</kbd>/<kbd>-</kbd> nudge. Higher warp burns fuel hard and turns slower.</li>
-      <li>Fuel 0 = impulse crawl (warp locked 0) until you refuel in friendly orbit, not under fire.</li>
+      <li>Fuel 0 = <b>limp warp 2</b> (keys <kbd>1</kbd>–<kbd>2</kbd> only, no fuel burn) until you refuel in friendly orbit, not under fire.</li>
     </ul>
     <p><b style="color:var(--amber);font-weight:normal;">COMBAT</b></p>
     <ul>
@@ -514,7 +514,8 @@
     </ul>
     <p><b style="color:var(--amber);font-weight:normal;">CONQUEST</b></p>
     <ul>
-      <li><kbd>B</kbd> beam (hold to keep transferring). Friendly orbit: pick up armies (a garrison stays). Hostile orbit: drop armies to invade.</li>
+      <li><kbd>B</kbd> beam (hold to keep transferring). Friendly orbit: pick up marines (a garrison stays). Hostile orbit: drop marines to invade.</li>
+      <li>You launch with <b>20 marines</b> aboard. Once guns are suppressed, <b>60 marines on the ground</b> capture the world.</li>
       <li>Bombard first — torpedoes that strike a hostile world cut defenses, then garrison.</li>
       <li>Hostile guns fire on ships in orbit. Suppress them. Then drop more armies than they can hold.</li>
       <li>Ground war resolves over seconds. Winner keeps the world.</li>
@@ -523,13 +524,13 @@
     <p><b style="color:var(--amber);font-weight:normal;">SHIP SYSTEMS</b></p>
     <ul>
       <li>Refuel is automatic in safe friendly orbit (Class-M in GALAXY is much faster). <kbd>U</kbd> extra dump. <kbd>R</kbd> repair hull in friendly orbit.</li>
-      <li>Fuel regenerates slowly in space. Warp, phasers, photons, and hops all spend it. Impulse crawl at 0.</li>
+      <li>New ships begin at <b>130 fuel</b>. Fuel regenerates slowly in space. Warp, phasers, photons, and hops all spend it.</li>
       <li><kbd>[</kbd> <kbd>]</kbd> or <kbd>,</kbd> <kbd>.</kbd> radar zoom. <kbd>M</kbd> strategic map (SOL: action slows; GALAXY: time keeps running for everyone).</li>
-      <li>Click a body (or nearest is shown) for the info sheet — owner, armies, guns, a real fact.</li>
-      <li><kbd>P</kbd> or <kbd>ESC</kbd> pause (SOL). <kbd>N</kbd> mute. <kbd>K</kbd> Bubble (optional bad advice; never blocks you).</li>
+      <li>Click a body (or nearest is shown) for the info sheet — owner, marines, guns, a real fact.</li>
+      <li><kbd>P</kbd> or <kbd>ESC</kbd> pause (SOL). <kbd>N</kbd> mute (SFX + ambient music). <kbd>K</kbd> Bubble (optional bad advice; never blocks you).</li>
       <li>Approach a planet and the camera zooms in 50% with your ship centered, then eases back out.</li>
-      <li>Warp keys and hyper-hop play a short engine whoosh (Web Audio; mute with <kbd>N</kbd>). Space travel runs about 40% slower than the prior release.</li>
-      <li><b>SCORE</b> is always on the HUD: 1 point per enemy ship. Every 10 points: +10% energy (fuel) and +10% shields, up to 50% at 50 kills (TIER T1–T5). At 50 / 100 / … kills a larger BOSS ship appears (40% stronger).</li>
+      <li>Procedural Web Audio: cinematic ambient loop on play (starts after first keypress if the browser requires it). Warp and hyper-hop play a short engine whoosh. SFX are loud; mute with <kbd>N</kbd>.</li>
+      <li><b>SCORE</b> is on the HUD: 1 point per enemy ship. At 50 / 100 / … kills a larger <b>BOSS</b> ship appears (40% stronger). Kill-score no longer raises max fuel or shields.</li>
     </ul>
     <p><b style="color:var(--amber);font-weight:normal;">GALAXY (INTERNET ROOMS)</b></p>
     <ul>
