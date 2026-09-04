@@ -6,9 +6,7 @@
   var TAU = Math.PI * 2.0;
   var TICK_HZ = 20.0;
   var DT = 1.0 / TICK_HZ;
-  var PLAY_RATE = 0.48; /* 40% slower than prior 0.8 pace: sim dt, speeds, weapon cadence */
-  var MAX_ASTEROIDS = 20;
-  var ASTEROID_R = 10.5;
+  var PLAY_RATE = 0.8; /* 20% slower fight: sim dt, speeds, weapon cadence */
   var MAX_PLAYERS = 12;
   var MAX_TORP_INFLIGHT = 6;
   var MAX_CHAT = 10;
@@ -166,7 +164,6 @@
     this.players = {};
     this.planets = [];
     this.torps = [];
-    this.asteroids = [];
     this.events = [];
     this.chat = [];
     this.seqEv = 0;
@@ -188,161 +185,6 @@
       if (locked && prevHost && this.players[prevHost]) this.hostId = prevHost;
       else this.hostId = humans[0].id;
       for (i = 0; i < humans.length; i++) humans[i].host = humans[i].id === this.hostId;
-    }
-  };
-
-  Game.prototype.orbitCaptureDist = function (b) {
-    return b.r + 52;
-  };
-
-  Game.prototype.orbitPlanet = function (ship) {
-    if (!ship || !ship.orbitPid) return null;
-    return this.planet(ship.orbitPid);
-  };
-
-  Game.prototype.breakOrbit = function (ship) {
-    if (!ship || !ship.orbitPid) return false;
-    ship.orbitPid = null;
-    return true;
-  };
-
-  Game.prototype.tryCaptureOrbit = function (ship) {
-    if (!ship || !ship.alive || ship.orbitPid) return;
-    var best = null, bd = 1e9, i, b, d;
-    for (i = 0; i < this.planets.length; i++) {
-      b = this.planets[i];
-      d = dist(ship.x, ship.y, b.x, b.y);
-      if (d < this.orbitCaptureDist(b) && d < bd) { bd = d; best = b; }
-    }
-    if (!best) return;
-    ship.orbitPid = best.id;
-    ship.orbitAng = Math.atan2(ship.y - best.y, ship.x - best.x);
-    ship.orbitDist = clamp(bd, best.r + 18, best.r + 34);
-    var rs = RACES[ship.race] || RACES.helios;
-    ship.orbitSpd = warpSpeed(3, rs.speed, ship.fuel || 100) / Math.max(ship.orbitDist, best.r + 10);
-    ship.warp = 0;
-  };
-
-  Game.prototype.updateAutoOrbit = function (ship, dt, inp) {
-    var b = this.orbitPlanet(ship);
-    if (!b) { ship.orbitPid = null; return false; }
-    if ((inp.w != null && inp.w > 0) || (ship.warp || 0) > 0) {
-      this.breakOrbit(ship);
-      return false;
-    }
-    ship.orbitAng += ship.orbitSpd * dt;
-    ship.x = b.x + Math.cos(ship.orbitAng) * ship.orbitDist;
-    ship.y = b.y + Math.sin(ship.orbitAng) * ship.orbitDist;
-    ship.ang = ship.orbitAng + Math.PI * 0.5;
-    var rs = RACES[ship.race] || RACES.helios;
-    if (inp.l) ship.ang -= turnRate(0, rs.turn) * dt;
-    if (inp.r) ship.ang += turnRate(0, rs.turn) * dt;
-    ship.x = clamp(ship.x, -80, 1680);
-    ship.y = clamp(ship.y, -80, 1680);
-    return true;
-  };
-
-  Game.prototype.asteroidSpeed = function () {
-    return warpSpeed(6, 1.0, 100);
-  };
-
-  Game.prototype.makeAsteroidVerts = function () {
-    var n = 7 + Math.floor(Math.random() * 3), verts = [], i, a, rad;
-    for (i = 0; i < n; i++) {
-      a = (i / n) * TAU + (Math.random() - 0.5) * 0.5;
-      rad = 0.55 + Math.random() * 0.45;
-      verts.push([Math.cos(a) * rad, Math.sin(a) * rad]);
-    }
-    return verts;
-  };
-
-  Game.prototype.spawnAsteroid = function (nearX, nearY) {
-    var ang, rad, a, spd;
-    if (nearX != null) {
-      ang = Math.random() * TAU;
-      rad = 220 + Math.random() * 420;
-      a = { x: nearX + Math.cos(ang) * rad, y: nearY + Math.sin(ang) * rad };
-    } else {
-      a = { x: 80 + Math.random() * 1520, y: 80 + Math.random() * 1520 };
-    }
-    spd = this.asteroidSpeed();
-    ang = Math.random() * TAU;
-    a.vx = Math.cos(ang) * spd;
-    a.vy = Math.sin(ang) * spd;
-    a.tumble = Math.random() * TAU;
-    a.tumbleSpd = (Math.random() - 0.5) * 2.8;
-    a.verts = this.makeAsteroidVerts();
-    this.asteroids.push(a);
-  };
-
-  Game.prototype.initAsteroids = function () {
-    this.asteroids = [];
-    var i;
-    for (i = 0; i < MAX_ASTEROIDS; i++) this.spawnAsteroid();
-  };
-
-  Game.prototype.maintainAsteroids = function () {
-    var i, a, d, cx = 800, cy = 800, list = vals(this.players), j;
-    for (j = 0; j < list.length; j++) {
-      if (list[j].alive) { cx = list[j].x; cy = list[j].y; break; }
-    }
-    if (!this.asteroids) this.asteroids = [];
-    while (this.asteroids.length < MAX_ASTEROIDS) this.spawnAsteroid(cx, cy);
-    for (i = this.asteroids.length - 1; i >= 0; i--) {
-      a = this.asteroids[i];
-      d = dist(a.x, a.y, cx, cy);
-      if (d > 2000) {
-        this.asteroids.splice(i, 1);
-        this.spawnAsteroid(cx, cy);
-      }
-    }
-  };
-
-  Game.prototype.updateAsteroids = function (dt) {
-    var i, j, a, b, d, pull, spd, cur, scale, list, p, dx, dy, dd;
-    this.maintainAsteroids();
-    for (i = 0; i < this.asteroids.length; i++) {
-      a = this.asteroids[i];
-      for (j = 0; j < this.planets.length; j++) {
-        b = this.planets[j];
-        d = dist(a.x, a.y, b.x, b.y);
-        if (d < b.r + 200 && d > b.r + 4) {
-          pull = (b.r * 42) / (d * d);
-          a.vx += ((b.x - a.x) / d) * pull * dt;
-          a.vy += ((b.y - a.y) / d) * pull * dt;
-        }
-      }
-      a.x += a.vx * dt;
-      a.y += a.vy * dt;
-      a.tumble += a.tumbleSpd * dt;
-      a.x = clamp(a.x, -40, 1640);
-      a.y = clamp(a.y, -40, 1640);
-      spd = this.asteroidSpeed();
-      cur = Math.sqrt(a.vx * a.vx + a.vy * a.vy) || 1;
-      scale = spd / cur;
-      a.vx *= scale;
-      a.vy *= scale;
-    }
-    list = vals(this.players);
-    for (j = 0; j < list.length; j++) {
-      p = list[j];
-      if (!p.alive) continue;
-      for (i = 0; i < this.asteroids.length; i++) {
-        a = this.asteroids[i];
-        if (dist(p.x, p.y, a.x, a.y) < ASTEROID_R + 11) {
-          if (!p.shieldsOn || (p.shields || 0) <= 0) {
-            p.hull = 0;
-            this.killShip(p);
-          } else {
-            this.hitShip(p, 28, null);
-            dx = p.x - a.x; dy = p.y - a.y; dd = Math.sqrt(dx * dx + dy * dy) || 1;
-            p.x += (dx / dd) * 14;
-            p.y += (dy / dd) * 14;
-            a.vx -= (dx / dd) * 10;
-            a.vy -= (dy / dd) * 10;
-          }
-        }
-      }
     }
   };
 
@@ -493,7 +335,6 @@
     for (i = 0; i < drop.length; i++) delete this.players[drop[i]];
     this.makePlanets();
     this.torps = [];
-    this.initAsteroids();
     this.events = [];
     this.elim = {};
     this.winner = null;
@@ -593,10 +434,6 @@
     var rs = RACES[p.race];
     var keepScore = p.score || 0;
     p.x = sp.x; p.y = sp.y; p.ang = sp.ang; p.warp = 0;
-    p.orbitPid = null;
-    p.orbitAng = 0;
-    p.orbitDist = 0;
-    p.orbitSpd = 0;
     p.hull = rs.hull; p.maxHull = rs.hull;
     p.fuel = rs.fuel; p.maxFuel = rs.fuel;
     p.armies = 0; p.maxArmies = 16;
@@ -628,14 +465,8 @@
     return dist(x, y, b.x, b.y) < b.r + 38;
   };
 
-  Game.prototype.shipInOrbit = function (ship, b) {
-    if (ship && ship.orbitPid === b.id) return true;
-    return this.inOrbit(ship.x, ship.y, b);
-  };
-
   Game.prototype.orbiting = function (ship) {
     var best = null, sc = 1e9, i, b, d;
-    if (ship.orbitPid) return this.planet(ship.orbitPid);
     for (i = 0; i < this.planets.length; i++) {
       b = this.planets[i];
       if (!this.inOrbit(ship.x, ship.y, b)) continue;
@@ -699,7 +530,6 @@
   Game.prototype.hyper = function (ship) {
     if (!ship.alive || ship.hyperCd > 0) return;
     if (ship.fuel < 18) return;
-    this.breakOrbit(ship);
     var rs = RACES[ship.race];
     var hop = 118.0 + 40.0 * rs.speed;
     ship.x += Math.cos(ship.ang) * hop;
@@ -1077,18 +907,11 @@
       p.shieldsOn = false;
     }
 
-    if (inp.h && !p.didH) this.breakOrbit(p);
-
-    if (!p.orbitPid) this.tryCaptureOrbit(p);
-
-    var orbiting = this.updateAutoOrbit(p, dt, inp);
-    if (!orbiting) {
-      var sp = warpSpeed(p.warp || 0, rs.speed, p.fuel || 0);
-      p.x += Math.cos(p.ang) * sp * dt;
-      p.y += Math.sin(p.ang) * sp * dt;
-      p.x = clamp(p.x, -80, 1680);
-      p.y = clamp(p.y, -80, 1680);
-    }
+    var sp = warpSpeed(p.warp || 0, rs.speed, p.fuel || 0);
+    p.x += Math.cos(p.ang) * sp * dt;
+    p.y += Math.sin(p.ang) * sp * dt;
+    p.x = clamp(p.x, -80, 1680);
+    p.y = clamp(p.y, -80, 1680);
 
     p.fuel -= fuelBurn(p.warp || 0, p.shieldsOn) * dt;
 
@@ -1313,7 +1136,6 @@
       this.updateShip(p, dt);
     }
     this.updateTorps(dt);
-    this.updateAsteroids(dt);
     this.updatePlanets(dt);
     if (this.tickN % 8 === 0) this.checkOutcome();
     this.sweepStale();
@@ -1363,8 +1185,7 @@
         k: (p.score || 0) | 0,
         u: (p.upgradeTier || 0) | 0,
         B: p.boss ? 1 : 0,
-        Q: r1(p.maxShields || 70),
-        o: p.orbitPid ? 1 : 0
+        Q: r1(p.maxShields || 70)
       });
     }
     var planets = [];
@@ -1384,11 +1205,6 @@
       var t = this.torps[i];
       torps.push({ x: r1(t.x), y: r1(t.y), r: String(t.race).charAt(0), o: t.oid });
     }
-    var asts = [];
-    for (i = 0; i < (this.asteroids || []).length; i++) {
-      var ast = this.asteroids[i];
-      asts.push({ x: r1(ast.x), y: r1(ast.y), a: r2(ast.tumble) });
-    }
     sc = this.counts();
     var elim = [];
     for (i = 0; i < RACE_ORDER.length; i++) if (this.elim[RACE_ORDER[i]]) elim.push(RACE_ORDER[i]);
@@ -1401,7 +1217,6 @@
       sh: ships,
       pl: planets,
       tr: torps,
-      as: asts,
       ch: this.chat.slice(-8),
       sc: (function () {
         var o = {}, j;

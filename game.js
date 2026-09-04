@@ -12,11 +12,9 @@
   var LS_SEED = "ringfire-last-seed-v1";
   var LS_CFG = "ringfire-last-cfg-v1";
   var LS_SET = "ringfire-settings-v1";
-  var PLAY_RATE = 0.48;      /* 40% slower than prior 0.8 pace (sim dt / speeds / cadence) */
+  var PLAY_RATE = 0.8;       /* 20% slower fight (sim dt / speeds / cadence) */
   var BLAST_SCALE = 1.3;     /* explosions 30% bigger than prior blast size */
-  var PLANET_ZOOM = 1.5;     /* 50% camera zoom-in near a planet, ship centered */
-  var MAX_ASTEROIDS = 20;
-  var ASTEROID_R = 10.5;     /* rocky bodies ~50% larger than dart ship */
+  var PLANET_ZOOM = 1.3;     /* 30% camera zoom-in near a planet, ship centered */
   var BASE_FUEL = 100;
   var BASE_SHIELDS = 80;
   var BASE_ENEMY_HULL = 58;
@@ -440,11 +438,7 @@
       spawnT: 0,
       flash: 0,
       invuln: 1.6,
-      score: (g.score || 0),
-      orbitLock: null,
-      orbitAng: 0,
-      orbitDist: 0,
-      orbitSpd: 0
+      score: (g.score || 0)
     };
     applyPlayerUpgrades(g);
   }
@@ -492,7 +486,6 @@
     };
     spawnEnemies(g);
     resetPlayer(g, map.earth);
-    initAsteroids(g);
     g.camX = g.player.x;
     g.camY = g.player.y;
     G = g;
@@ -525,180 +518,10 @@
   function orbitBand(b) {
     return b.r + (b.kind === "star" ? 70 : b.kind === "planet" ? 28 : 20);
   }
-  function orbitCaptureDist(b) {
-    return orbitBand(b) + 32;
-  }
   function inOrbit(ship, b) {
     if (!b || b.kind === "star") return false;
-    if (ship.orbitLock === b.id) return true;
     var d = dist(ship.x, ship.y, b.x, b.y);
     return d < orbitBand(b) + 18;
-  }
-  function orbitBody(ship) {
-    if (!ship || !ship.orbitLock || !G) return null;
-    return G.map[ship.orbitLock] || null;
-  }
-  function breakOrbit(ship, msg) {
-    if (!ship || !ship.orbitLock) return false;
-    ship.orbitLock = null;
-    if (msg) G.status = msg;
-    return true;
-  }
-  function tryCaptureOrbit(ship) {
-    if (!ship || !ship.alive || ship.orbitLock) return;
-    var best = null, bd = 1e9, i, b, d;
-    for (i = 0; i < G.bodies.length; i++) {
-      b = G.bodies[i];
-      if (!b || b.kind === "star") continue;
-      d = dist(ship.x, ship.y, b.x, b.y);
-      if (d < orbitCaptureDist(b) && d < bd) { bd = d; best = b; }
-    }
-    if (!best) return;
-    ship.orbitLock = best.id;
-    ship.orbitAng = Math.atan2(ship.y - best.y, ship.x - best.x);
-    ship.orbitDist = clamp(bd, orbitBand(best) + 8, orbitBand(best) + 22);
-    ship.orbitSpd = warpSpeed(3) / Math.max(ship.orbitDist, best.r + 10);
-    ship.warp = 0;
-    G.status = "AUTO ORBIT — " + best.name + "  (H or warp breaks)";
-  }
-  function updateAutoOrbit(ship, dt) {
-    var b = orbitBody(ship);
-    if (!b) { ship.orbitLock = null; return false; }
-    if (ship.warp > 0) { breakOrbit(ship, "ORBIT BROKEN — THRUST"); return false; }
-    ship.orbitAng += ship.orbitSpd * dt;
-    ship.x = b.x + Math.cos(ship.orbitAng) * ship.orbitDist;
-    ship.y = b.y + Math.sin(ship.orbitAng) * ship.orbitDist;
-    ship.ang = ship.orbitAng + Math.PI * 0.5;
-    if (keys.arrowleft || keys.a) ship.ang -= turnRate(0) * dt;
-    if (keys.arrowright || keys.d) ship.ang += turnRate(0) * dt;
-    return true;
-  }
-  function asteroidSpeed() {
-    return warpSpeed(6);
-  }
-  function makeAsteroidVerts(rng) {
-    var n = 7 + Math.floor(rng() * 3), verts = [], i, a, rad;
-    for (i = 0; i < n; i++) {
-      a = (i / n) * TAU + (rng() - 0.5) * 0.5;
-      rad = 0.55 + rng() * 0.45;
-      verts.push([Math.cos(a) * rad, Math.sin(a) * rad]);
-    }
-    return verts;
-  }
-  function spawnAsteroid(g, rng, nearX, nearY) {
-    var ang, rad, a;
-    if (nearX != null) {
-      ang = rng() * TAU;
-      rad = 280 + rng() * 520;
-      a = {
-        x: nearX + Math.cos(ang) * rad,
-        y: nearY + Math.sin(ang) * rad
-      };
-    } else {
-      ang = rng() * TAU;
-      rad = 220 + rng() * 3400;
-      a = { x: Math.cos(ang) * rad, y: Math.sin(ang) * rad };
-    }
-    var spd = asteroidSpeed();
-    ang = rng() * TAU;
-    a.vx = Math.cos(ang) * spd;
-    a.vy = Math.sin(ang) * spd;
-    a.tumble = rng() * TAU;
-    a.tumbleSpd = (rng() - 0.5) * 2.8;
-    a.verts = makeAsteroidVerts(rng);
-    g.asteroids.push(a);
-  }
-  function initAsteroids(g) {
-    g.asteroids = [];
-    var i;
-    for (i = 0; i < MAX_ASTEROIDS; i++) spawnAsteroid(g, g.rng);
-  }
-  function maintainAsteroids(g) {
-    var p = g.player, i, a, d, spd, cur, scale;
-    if (!g.asteroids) g.asteroids = [];
-    while (g.asteroids.length < MAX_ASTEROIDS) spawnAsteroid(g, g.rng, p.x, p.y);
-    for (i = g.asteroids.length - 1; i >= 0; i--) {
-      a = g.asteroids[i];
-      d = dist(a.x, a.y, p.x, p.y);
-      if (d > 2400) {
-        g.asteroids.splice(i, 1);
-        spawnAsteroid(g, g.rng, p.x, p.y);
-      }
-    }
-  }
-  function updateAsteroids(dt) {
-    var i, j, a, b, d, pull, spd, cur, scale, p;
-    if (!G.asteroids) return;
-    maintainAsteroids(G);
-    for (i = 0; i < G.asteroids.length; i++) {
-      a = G.asteroids[i];
-      for (j = 0; j < G.bodies.length; j++) {
-        b = G.bodies[j];
-        if (!b || b.kind === "star") continue;
-        d = dist(a.x, a.y, b.x, b.y);
-        if (d < b.r + 240 && d > b.r + 4) {
-          pull = (b.r * 48) / (d * d);
-          a.vx += ((b.x - a.x) / d) * pull * dt;
-          a.vy += ((b.y - a.y) / d) * pull * dt;
-        }
-      }
-      a.x += a.vx * dt;
-      a.y += a.vy * dt;
-      a.tumble += a.tumbleSpd * dt;
-      spd = asteroidSpeed();
-      cur = Math.sqrt(a.vx * a.vx + a.vy * a.vy) || 1;
-      scale = spd / cur;
-      a.vx *= scale;
-      a.vy *= scale;
-    }
-    p = G.player;
-    if (!p.alive) return;
-    for (i = 0; i < G.asteroids.length; i++) {
-      a = G.asteroids[i];
-      if (dist(p.x, p.y, a.x, a.y) < ASTEROID_R + 11) {
-        if (!p.shieldsOn || p.shields <= 0) {
-          p.hull = 0;
-          hitShip(p, 0, true);
-          G.status = "ASTEROID IMPACT — HULL BREACH";
-        } else {
-          hitShip(p, 28, true);
-          var dx = p.x - a.x, dy = p.y - a.y, dd = Math.sqrt(dx * dx + dy * dy) || 1;
-          p.x += (dx / dd) * 14;
-          p.y += (dy / dd) * 14;
-          a.vx -= (dx / dd) * 10;
-          a.vy -= (dy / dd) * 10;
-          G.status = "ASTEROID STRIKE — SHIELDS";
-        }
-      }
-    }
-  }
-  function asteroidVertsFor(i) {
-    if (!asteroidVertsFor._c) asteroidVertsFor._c = [];
-    if (!asteroidVertsFor._c[i]) asteroidVertsFor._c[i] = makeAsteroidVerts(mulberry32((i + 1) * 7919));
-    return asteroidVertsFor._c[i];
-  }
-  function drawAsteroid(sx, sy, a, zoom) {
-    var r = ASTEROID_R * zoom, i, v;
-    ctx.save();
-    ctx.translate(sx, sy);
-    ctx.rotate(a.tumble);
-    ctx.beginPath();
-    for (i = 0; i < a.verts.length; i++) {
-      v = a.verts[i];
-      if (i === 0) ctx.moveTo(v[0] * r, v[1] * r);
-      else ctx.lineTo(v[0] * r, v[1] * r);
-    }
-    ctx.closePath();
-    ctx.fillStyle = "#5a4a38";
-    ctx.strokeStyle = "#2e2820";
-    ctx.lineWidth = 1.2;
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "rgba(90,70,55,0.35)";
-    ctx.beginPath();
-    ctx.arc(r * 0.15, -r * 0.2, r * 0.22, 0, TAU);
-    ctx.fill();
-    ctx.restore();
   }
   function nearestBody(x, y, maxD) {
     var best = null, bd = maxD || 1e9;
@@ -1496,16 +1319,9 @@
       G.status = "FUEL ZERO — IMPULSE ONLY";
     }
 
-    if (just.h && p.orbitLock) breakOrbit(p, "ORBIT BROKEN — HYPERJUMP");
-
-    if (!p.orbitLock) tryCaptureOrbit(p);
-
-    var orbiting = updateAutoOrbit(p, dt);
-    if (!orbiting) {
-      var sp = warpSpeed(p.warp);
-      p.x += Math.cos(p.ang) * sp * dt;
-      p.y += Math.sin(p.ang) * sp * dt;
-    }
+    var sp = warpSpeed(p.warp);
+    p.x += Math.cos(p.ang) * sp * dt;
+    p.y += Math.sin(p.ang) * sp * dt;
 
     var burn = fuelBurn(p.warp, p.shieldsOn);
     p.fuel -= burn * dt;
@@ -1553,7 +1369,6 @@
     }
 
     if ((just.h) && (p.hyperCd || 0) <= 0 && p.fuel >= 18) {
-      breakOrbit(p);
       var hop = 132;
       p.x += Math.cos(p.ang) * hop;
       p.y += Math.sin(p.ang) * hop;
@@ -1855,16 +1670,6 @@
 
     drawParticles(G.particles, dt, worldToScreen, G.zoom);
 
-    if (G.asteroids && !G.mapOpen) {
-      for (var ai = 0; ai < G.asteroids.length; ai++) {
-        var ast = G.asteroids[ai];
-        var as = worldToScreen(ast.x, ast.y);
-        if (as.x < -60 || as.y < -60 || as.x > viewW + 60 || as.y > viewH + 60) continue;
-        if (!ast.verts) ast.verts = asteroidVertsFor(ai);
-        drawAsteroid(as.x, as.y, ast, G.zoom);
-      }
-    }
-
     for (var ei = 0; ei < G.enemies.length; ei++) {
       var en = G.enemies[ei];
       if (!en.alive) continue;
@@ -1943,7 +1748,7 @@
     var owner = !b.owner ? "—" : (b.owner === FRIEND ? "FRIENDLY" : "MANDATE");
     var oc = !b.owner ? "" : (b.owner === FRIEND ? "owner-F" : "owner-E");
     var d = dist(G.player.x, G.player.y, b.x, b.y).toFixed(0);
-    var orbit = p.orbitLock ? "AUTO ORBIT" : (inOrbit(G.player, b) ? "IN ORBIT" : "RANGE " + d);
+    var orbit = inOrbit(G.player, b) ? "IN ORBIT" : "RANGE " + d;
     var guns = b.def ? b.def.toFixed(1) : "0";
     var battle = "";
     if (b.battle) {
@@ -1961,7 +1766,7 @@
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       cap + battle +
       "<div class='fact'>" + b.fact + "</div>" +
-      "<div class='fact' style='margin-top:14px;color:#6a9a6a'>CLICK BODY TO LOCK<br>H or warp breaks auto-orbit<br>[ / ] RADAR ZOOM<br>M SYSTEM MAP</div>";
+      "<div class='fact' style='margin-top:14px;color:#6a9a6a'>CLICK BODY TO LOCK<br>[ / ] RADAR ZOOM<br>M SYSTEM MAP</div>";
   }
 
   function bar(n, max, w) {
@@ -2437,7 +2242,6 @@
 
     updateBodies(sdt);
     updatePlayer(sdt);
-    updateAsteroids(sdt);
     for (var i = 0; i < G.enemies.length; i++) updateEnemy(G.enemies[i], sdt);
     tickEnemyRespawn(sdt);
     updateProjectiles(sdt);
@@ -3662,16 +3466,6 @@
 
     drawParticles(GX.particles, dt, gxWTS, GX.zoom);
 
-    var astList = st.as || [];
-    if (!GX.mapOpen) {
-      for (i = 0; i < astList.length; i++) {
-        var ast = astList[i];
-        var asp = gxWTS(ast.x, ast.y);
-        if (asp.x < -60 || asp.y < -60 || asp.x > viewW + 60 || asp.y > viewH + 60) continue;
-        drawAsteroid(asp.x, asp.y, { tumble: ast.a || 0, verts: asteroidVertsFor(i) }, GX.zoom);
-      }
-    }
-
     var sh = st.sh || [];
     for (i = 0; i < sh.length; i++) {
       var ship = gxLerpShip(sh[i].id);
@@ -3767,7 +3561,7 @@
     var oc = b.o === "N" ? "owner-N" : (b.o === "helios" ? "owner-H" : b.o === "veil" ? "owner-V" : b.o === "spark" ? "owner-S" : "owner-M");
     var owner = b.o === "N" ? "NEUTRAL (SELF-RULED)" : ((RACE[b.o] && RACE[b.o].name) || b.o);
     var d = me ? dist(me.x, me.y, b.x, b.y).toFixed(0) : "—";
-    var orbit = me && me.o ? "AUTO ORBIT" : (me && dist(me.x, me.y, b.x, b.y) < b.R + 38 ? "IN ORBIT" : "RANGE " + d);
+    var orbit = me && dist(me.x, me.y, b.x, b.y) < b.R + 38 ? "IN ORBIT" : "RANGE " + d;
     var battle = "";
     if (b.b) battle = "<div class='kv'><b>GROUND WAR</b> " + ((RACE[b.b.s] && RACE[b.b.s].name) || b.b.s) + " " + b.b.a + " vs GAR " + b.m + "</div>";
     var sc = st.sc || {};
@@ -3785,7 +3579,7 @@
       "<div class='kv'><b>STATUS</b> " + orbit + "</div>" +
       battle +
       "<div class='fact' style='margin-top:12px'>" + score + "</div>" +
-      "<div class='fact' style='margin-top:12px;color:#6a9a6a'>SPACE photons  F phasers<br>X detonate  H hop/break orbit  B beam<br>U refuel  M map  Enter chat</div>";
+      "<div class='fact' style='margin-top:12px;color:#6a9a6a'>SPACE photons  F phasers<br>X detonate  H hop  B beam<br>U refuel  M map  Enter chat</div>";
   }
 
   function gxChatPaint(st) {

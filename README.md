@@ -67,9 +67,9 @@ One ship, nine planets, moving moons, and a clock. The Mandate holds Titan. Reta
 
 ## How to play
 1. Load armies from a friendly world (`B` in orbit — a garrison stays behind).
-2. Warp (`1`–`9`). In SOL, keys also jump you toward numbered system bodies from habit; in GALAXY they only set warp. Near any planet you auto-enter orbit; break out with `H` or any warp key.
+2. Warp (`1`–`9`). In SOL, keys also jump you toward numbered system bodies from habit; in GALAXY they only set warp.
 3. **Phasers** (`F` / `C` / right-click) for a cone in front. **Photons** (`SPACE`) travel and can be dodged (max 6 in flight). **Detonate** your own photons (`X` or `G`) for area damage.
-4. **Hop** (`H`) — short burst along your nose, high fuel, brief invulnerability. Also **breaks auto-orbit**. Lead it or detonate into the landing.
+4. **Hop** (`H`) — short burst along your nose, high fuel, brief invulnerability. Lead it or detonate into the landing.
 5. Bombard a hostile disc until guns die, then `B`eam armies down. Ground war resolves over a few seconds.
 6. Refuel is **automatic** in safe friendly orbit (Class-M in GALAXY is much faster). `U` extra dump. `R` repair.
 
@@ -78,7 +78,7 @@ SOL: the Mandate also invades. You lose when no friendly planets remain. Win: al
 GALAXY is keyboard-first (touch bar is for SOL). `Enter` types a short room chat.
 
 ## Combat feel
-Explosions use particles, shock rings, and debris (about 30% larger than before). Near a planet the client camera zooms in 50% with the ship centered, then eases out. Approach a planet and you auto-enter orbit until you break out with `H` or warp. Twenty asteroids tumble at warp-6 speed; planet gravity pulls them; unshielded hits destroy your ship. Warp and hyper-hop play a short Web Audio whoosh. The whole fight runs about 40% slower than the prior release (on top of the earlier pace reduction).
+Explosions use particles, shock rings, and debris (about 30% larger than before). Near a planet the client camera zooms in 30% with the ship centered, then eases out. Warp and hyper-hop play a short Web Audio whoosh. The whole fight runs about 20% slower.
 
 ## Score and upgrades
 HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/30/40/50 kills your max energy and shields are 10/20/30/40/50% above the ship baseline (not stacked on the previous bonus). A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score/upgrades are per player; the host spawns bosses.
@@ -92,7 +92,7 @@ HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/3
 | `SPACE` | Photon torpedo (hold to repeat). Hits ships, or bombards a hostile disc. Limited in flight. |
 | `F` / `C` / right-click | Phasers (cone, instant, costs fuel) |
 | `X` / `G` | Detonate your photons (AoE) |
-| `H` | Hyperjump / hop (also breaks auto-orbit) |
+| `H` | Hyperjump / hop |
 | `T` | Tracking missile (**SOL only**) |
 | `S` | Shields on/off (drains fuel) |
 | `B` | Beam armies up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
