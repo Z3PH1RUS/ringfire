@@ -85,6 +85,13 @@ Explosions use particles, shock rings, and debris (about 30% larger than before)
 ## Score and upgrades
 HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/30/40/50 kills your max energy and shields are 10/20/30/40/50% above the ship baseline (not stacked on the previous bonus). A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score/upgrades are per player; the host spawns bosses.
 
+## CHAOS CIRCUIT
+Arcade juice layered on top of the core war loop (SOL local; GALAXY host-authoritative):
+
+- **Rift surges** — up to two short-lived glowing rifts in open space. Fly through for one ~9s buff: **CRIMSON OVERDRIVE** (faster phasers/photons), **CYAN PHANTOM** (harder to track), or **GOLD SIPHON** (extra fuel regen in space). HUD shows active buff; banner on pickup.
+- **Kill streak** — kills within ~6s build **STREAK xN** on the HUD. At x3+: ~2s thrust boost and +1 score (x5+: +2).
+- **Salvage pods** — ~45% of destroyed ships drop a pod. Scoop for +fuel, +marines (capped), or shield top-up. Pods despawn after ~20s (max ~6 on field).
+
 ## Controls
 | Key | Action |
 | --- | --- |

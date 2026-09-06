@@ -16,6 +16,17 @@
   var START_MARINES = 20;
   var CAPTURE_MARINES = 40;
 
+  var CHAOS_RIFTS = [
+    { id: "overdrive", name: "CRIMSON OVERDRIVE", phCd: 0.52, torpCd: 0.78 },
+    { id: "phantom", name: "CYAN PHANTOM", hunt: 0.62, aim: 1.45 },
+    { id: "siphon", name: "GOLD SIPHON", fuel: 8.0 }
+  ];
+  var CHAOS = {
+    buffT: 9, riftMax: 2, riftRespawn: 22, riftPick: 28,
+    streakWin: 6, streakBoostT: 2, streakSpeed: 1.22,
+    podDrop: 0.45, podMax: 6, podLife: 20, podPick: 22, podMag: 34
+  };
+
   var RACES = {
     helios: {
       name: "HELIOS", color: "#e8d48a",
@@ -176,6 +187,9 @@
     this.tickN = 0;
     this.killCount = 0;
     this.bossSpawned = 0;
+    this.rifts = [];
+    this.pods = [];
+    this.riftTimer = 6;
     if (humans.length) {
       for (i = 0; i < humans.length; i++) {
         p = humans[i];
@@ -282,7 +296,8 @@
       inp: {}, seq: 0, last: nowSec(),
       chatT: 0.0,
       didX: false, didH: false, didS: false, didM: false,
-      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null
+      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null,
+      buff: null, buffT: 0, streak: 0, streakT: 0, streakBoostT: 0
     };
     if (opts.host) this.hostId = pid;
     else if (this.hostId == null && !this.hostLocked) this.hostId = pid;
@@ -346,6 +361,9 @@
     this.tickN = 0;
     this.killCount = 0;
     this.bossSpawned = 0;
+    this.rifts = [];
+    this.pods = [];
+    this.riftTimer = 6;
     present = {};
     for (id in this.players) {
       p = this.players[id];
@@ -380,7 +398,8 @@
       inp: {}, seq: 0, last: nowSec(),
       state: "patrol", huntT: 0.0, tgt: null,
       didX: false, didH: false, didS: false,
-      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null
+      score: 0, upgradeTier: 0, boss: 0, dmgMul: 1.0, lastHit: null,
+      buff: null, buffT: 0, streak: 0, streakT: 0, streakBoostT: 0
     };
     this.players[pid] = rec;
     return rec;
@@ -425,6 +444,140 @@
     p.maxShields = ns;
     if (df > 0) p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + df);
     if (ds > 0) p.shields = Math.min(p.maxShields, (p.shields || 0) + ds);
+  };
+
+  Game.prototype.chaosNearPlanet = function (x, y, pad) {
+    pad = pad == null ? 110 : pad;
+    var i, b;
+    for (i = 0; i < this.planets.length; i++) {
+      b = this.planets[i];
+      if (dist(x, y, b.x, b.y) < b.r + pad) return true;
+    }
+    return false;
+  };
+
+  Game.prototype.chaosSpawnRift = function () {
+    if (this.rifts.length >= CHAOS.riftMax) return;
+    var x, y, t, tries = 0;
+    while (tries++ < 24) {
+      x = 180 + Math.random() * 1240;
+      y = 180 + Math.random() * 1240;
+      if (!this.chaosNearPlanet(x, y, 100)) break;
+    }
+    t = (Math.random() * CHAOS_RIFTS.length) | 0;
+    this.rifts.push({ x: x, y: y, t: t, life: 14 + Math.random() * 6, pulse: Math.random() * TAU });
+  };
+
+  Game.prototype.chaosApplyBuff = function (p, tIdx) {
+    if (!p || !p.alive) return;
+    var def = CHAOS_RIFTS[tIdx];
+    if (!def) return;
+    p.buff = def.id;
+    p.buffT = CHAOS.buffT;
+    this.emit("rift", { sid: p.id, t: tIdx, n: def.name });
+  };
+
+  Game.prototype.chaosTryRift = function (p) {
+    var i, r, d;
+    for (i = this.rifts.length - 1; i >= 0; i--) {
+      r = this.rifts[i];
+      d = dist(p.x, p.y, r.x, r.y);
+      if (d < CHAOS.riftPick) {
+        this.chaosApplyBuff(p, r.t);
+        this.rifts.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  Game.prototype.chaosSpawnPod = function (x, y) {
+    if (this.pods.length >= CHAOS.podMax) return;
+    this.pods.push({ x: x, y: y, life: CHAOS.podLife, wobble: Math.random() * TAU });
+  };
+
+  Game.prototype.chaosTryPod = function (p) {
+    var i, pod, d, pull, reward, msg, n;
+    for (i = this.pods.length - 1; i >= 0; i--) {
+      pod = this.pods[i];
+      d = dist(p.x, p.y, pod.x, pod.y);
+      if (d < CHAOS.podMag && d > 4) {
+        pull = (1 - d / CHAOS.podMag) * 48 * DT;
+        pod.x += (p.x - pod.x) / d * pull;
+        pod.y += (p.y - pod.y) / d * pull;
+      }
+      if (d < CHAOS.podPick) {
+        reward = (Math.random() * 3) | 0;
+        if (reward === 0) {
+          p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + 28);
+          msg = "+FUEL";
+        } else if (reward === 1) {
+          n = Math.min(6, (p.maxArmies || 28) - (p.armies || 0));
+          p.armies = (p.armies || 0) + n;
+          msg = "+" + n + " MARINES";
+        } else {
+          p.shields = Math.min(p.maxShields, (p.shields || 0) + 22);
+          msg = "SHIELDS TOP-UP";
+        }
+        this.emit("pod", { sid: p.id, m: msg });
+        this.pods.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  Game.prototype.chaosOnKill = function (killer) {
+    if (!killer) return;
+    if ((killer.streakT || 0) > 0) killer.streak = (killer.streak || 0) + 1;
+    else killer.streak = 1;
+    killer.streakT = CHAOS.streakWin;
+    if (killer.streak >= 3) {
+      killer.streakBoostT = CHAOS.streakBoostT;
+      var bonus = killer.streak >= 5 ? 2 : 1;
+      killer.score = (killer.score || 0) + bonus;
+      this.applyUpgrade(killer);
+      this.emit("streak", { sid: killer.id, n: killer.streak });
+    }
+  };
+
+  Game.prototype.chaosHasBuff = function (p, id) {
+    return p && p.alive && p.buff === id && (p.buffT || 0) > 0;
+  };
+
+  Game.prototype.tickChaos = function (dt) {
+    var list = vals(this.players), i, p;
+    this.riftTimer = (this.riftTimer || 0) - dt;
+    if (this.riftTimer <= 0) {
+      this.chaosSpawnRift();
+      if (this.rifts.length < CHAOS.riftMax && Math.random() < 0.45) this.chaosSpawnRift();
+      this.riftTimer = CHAOS.riftRespawn;
+    }
+    for (i = this.rifts.length - 1; i >= 0; i--) {
+      this.rifts[i].life -= dt;
+      this.rifts[i].pulse += dt * 4;
+      if (this.rifts[i].life <= 0) this.rifts.splice(i, 1);
+    }
+    for (i = this.pods.length - 1; i >= 0; i--) {
+      this.pods[i].life -= dt;
+      this.pods[i].wobble += dt * 5;
+      if (this.pods[i].life <= 0) this.pods.splice(i, 1);
+    }
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p.alive) continue;
+      if ((p.buffT || 0) > 0) {
+        p.buffT -= dt;
+        if (p.buffT <= 0) { p.buff = null; p.buffT = 0; }
+      }
+      this.chaosTryRift(p);
+      this.chaosTryPod(p);
+      if ((p.streakT || 0) > 0) {
+        p.streakT -= dt;
+        if (p.streakT <= 0) { p.streak = 0; p.streakT = 0; }
+      }
+      if ((p.streakBoostT || 0) > 0) p.streakBoostT -= dt;
+    }
   };
 
   Game.prototype.spawnShip = function (p, first) {
@@ -500,7 +653,7 @@
       vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
       life: 1.85, dmg: 18.0 * rs.torp * (ship.dmgMul || 1), r: 2.6
     });
-    ship.torpCd = 0.38;
+    ship.torpCd = 0.38 * (this.chaosHasBuff(ship, "overdrive") ? CHAOS_RIFTS[0].torpCd : 1);
     ship.fuel = Math.max(0.0, ship.fuel - 2.4);
     this.emit("torp", { sid: ship.id });
     var dock = this.orbiting(ship);
@@ -512,7 +665,7 @@
     if (ship.fuel < 6) return;
     var rs = RACES[ship.race];
     var reach = 195.0, half = 0.46;
-    ship.phaserCd = 0.44;
+    ship.phaserCd = 0.44 * (this.chaosHasBuff(ship, "overdrive") ? CHAOS_RIFTS[0].phCd : 1);
     ship.fuel = Math.max(0.0, ship.fuel - 7.0);
     this.emit("ph", { sid: ship.id, ang: r2(ship.ang), x: r1(ship.x), y: r1(ship.y) });
     var list = vals(this.players), i, o, d, want, fall, dmg;
@@ -618,8 +771,10 @@
     if (killer && killer.id !== ship.id) {
       killer.score = (killer.score || 0) + 1;
       this.applyUpgrade(killer);
+      this.chaosOnKill(killer);
     }
     this.killCount = (this.killCount || 0) + 1;
+    if (!wasBoss && Math.random() < CHAOS.podDrop) this.chaosSpawnPod(ship.x, ship.y);
     this.emit("die", { sid: ship.id, n: lost, x: r1(ship.x || 0), y: r1(ship.y || 0), B: wasBoss ? 1 : 0 });
     var sid = ship.id;
     this.torps = this.torps.filter(function (t) { return t.oid !== sid; });
@@ -825,12 +980,14 @@
 
   Game.prototype.nearestEnemyShip = function (e, lim) {
     if (lim == null) lim = 340;
-    var best = null, bd = lim, list = vals(this.players), i, o, d;
+    var best = null, bd = lim, list = vals(this.players), i, o, d, ol;
     for (i = 0; i < list.length; i++) {
       o = list[i];
       if (o === e || !o.alive || !this.hostile(e, o)) continue;
+      ol = lim;
+      if (this.chaosHasBuff(o, "phantom")) ol *= CHAOS_RIFTS[1].hunt;
       d = dist(e.x, e.y, o.x, o.y);
-      if (d < bd) { bd = d; best = o; }
+      if (d < ol && d < bd) { bd = d; best = o; }
     }
     return best;
   };
@@ -846,8 +1003,9 @@
       this.steer(e, prey.x + Math.cos(prey.ang) * lead, prey.y + Math.sin(prey.ang) * lead, dt, 6);
       d = dist(e.x, e.y, prey.x, prey.y);
       diff = Math.abs(angNorm(angTo(e.x, e.y, prey.x, prey.y) - e.ang));
-      if (d < 190 && diff < 0.5) this.firePhaser(e);
-      if (d < 260 && diff < 0.28) this.fireTorp(e);
+      var aimMul = this.chaosHasBuff(prey, "phantom") ? CHAOS_RIFTS[1].aim : 1;
+      if (d < 190 && diff < 0.5 * aimMul) this.firePhaser(e);
+      if (d < 260 && diff < 0.28 * aimMul) this.fireTorp(e);
       if (d < 90 && (e.hull || 1) < (e.maxHull || 100) * 0.4) this.hyper(e);
       return;
     }
@@ -917,6 +1075,7 @@
     }
 
     var sp = warpSpeed(p.warp || 0, rs.speed, p.fuel || 0);
+    if ((p.streakBoostT || 0) > 0 && (p.warp || 0) > 0) sp *= CHAOS.streakSpeed;
     p.x += Math.cos(p.ang) * sp * dt;
     p.y += Math.sin(p.ang) * sp * dt;
     p.x = clamp(p.x, -80, 1680);
@@ -934,7 +1093,7 @@
       }
       if (inp.u) p.fuel = Math.min(p.maxFuel, p.fuel + 10 * dt);
     } else {
-      p.fuel = Math.min(p.maxFuel, p.fuel + 0.42 * dt);
+      p.fuel = Math.min(p.maxFuel, p.fuel + 0.42 * dt + (this.chaosHasBuff(p, "siphon") ? CHAOS_RIFTS[2].fuel * dt : 0));
     }
 
     if (p.fuel < 0) p.fuel = 0;
@@ -1146,6 +1305,7 @@
     }
     this.updateTorps(dt);
     this.updatePlanets(dt);
+    this.tickChaos(dt);
     if (this.tickN % 8 === 0) this.checkOutcome();
     this.sweepStale();
   };
@@ -1196,6 +1356,14 @@
         B: p.boss ? 1 : 0,
         Q: r1(p.maxShields || 70)
       });
+      if (p.buff && (p.buffT || 0) > 0) {
+        ships[ships.length - 1].bf = p.buff.charAt(0);
+        ships[ships.length - 1].bt = r1(p.buffT);
+      }
+      if ((p.streak || 0) >= 2 && (p.streakT || 0) > 0) {
+        ships[ships.length - 1].sk = p.streak | 0;
+      }
+      if ((p.streakBoostT || 0) > 0) ships[ships.length - 1].sb = r1(p.streakBoostT);
     }
     var planets = [];
     for (i = 0; i < this.planets.length; i++) {
@@ -1217,7 +1385,15 @@
     sc = this.counts();
     var elim = [];
     for (i = 0; i < RACE_ORDER.length; i++) if (this.elim[RACE_ORDER[i]]) elim.push(RACE_ORDER[i]);
-    return {
+    var rf = [], sp = [], ri, pod;
+    for (ri = 0; ri < this.rifts.length; ri++) {
+      rf.push([r1(this.rifts[ri].x), r1(this.rifts[ri].y), this.rifts[ri].t | 0]);
+    }
+    for (ri = 0; ri < this.pods.length; ri++) {
+      pod = this.pods[ri];
+      sp.push([r1(pod.x), r1(pod.y)]);
+    }
+    var out = {
       p: this.phase === "play" ? "P" : (this.phase === "over" ? "O" : "L"),
       t: r1(this.time),
       w: this.winner,
@@ -1238,6 +1414,9 @@
       elim: elim,
       host: this.hostId
     };
+    if (rf.length) out.rf = rf;
+    if (sp.length) out.sp = sp;
+    return out;
   };
 
   var api = {

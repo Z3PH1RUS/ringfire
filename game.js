@@ -23,6 +23,18 @@
   var START_MARINES = 20;
   var CAPTURE_MARINES = 40;
 
+  /* CHAOS CIRCUIT — rift surges, kill streaks, salvage pods */
+  var CHAOS_RIFTS = [
+    { id: "overdrive", name: "CRIMSON OVERDRIVE", color: "#ff3050", phCd: 0.52, torpCd: 0.78 },
+    { id: "phantom", name: "CYAN PHANTOM", color: "#40e8ff", hunt: 0.62, aim: 1.45 },
+    { id: "siphon", name: "GOLD SIPHON", color: "#ffd040", fuel: 8.0 }
+  ];
+  var CHAOS = {
+    buffT: 9, riftMax: 2, riftRespawn: 22, riftPick: 28,
+    streakWin: 6, streakBoostT: 2, streakSpeed: 1.22,
+    podDrop: 0.45, podMax: 6, podLife: 20, podPick: 22, podMag: 34
+  };
+
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function dist(ax, ay, bx, by) {
@@ -383,6 +395,11 @@
           self.beep(200, 0.18, "triangle", 0.1, 80);
         }
       });
+    },
+    sfxChaosPickup: function () {
+      this.beep(520, 0.05, "square", 0.14);
+      this.beep(780, 0.07, "square", 0.12);
+      this.beep(1040, 0.06, "sine", 0.09);
     }
   };
 
@@ -638,7 +655,8 @@
       spawnT: 0,
       flash: 0,
       invuln: 1.6,
-      score: (g.score || 0)
+      score: (g.score || 0),
+      buff: null, buffT: 0
     };
     applyPlayerUpgrades(g);
   }
@@ -682,7 +700,9 @@
       score: 0,
       upgradeTier: 0,
       bossesSpawned: 0,
-      baseZoom: 1.15
+      baseZoom: 1.15,
+      rifts: [], pods: [], riftTimer: 6,
+      streak: 0, streakT: 0, streakBoostT: 0, streakPulse: 0
     };
     spawnEnemies(g);
     resetPlayer(g, map.earth, true);
@@ -901,7 +921,207 @@
     if (!G || !en || en._scored) return;
     en._scored = true;
     G.score = (G.score || 0) + 1;
+    chaosOnKill();
     applyPlayerUpgrades(G);
+    if (G.rng() < CHAOS.podDrop) chaosSpawnPod(en.x, en.y);
+  }
+
+  function chaosRiftDef(id) {
+    var i;
+    for (i = 0; i < CHAOS_RIFTS.length; i++) if (CHAOS_RIFTS[i].id === id) return CHAOS_RIFTS[i];
+    return CHAOS_RIFTS[0];
+  }
+  function chaosBuffLabel(id) {
+    var d = chaosRiftDef(id);
+    return d ? d.name : "";
+  }
+  function chaosNearPlanet(x, y, pad) {
+    pad = pad == null ? 90 : pad;
+    var i, b, d;
+    for (i = 0; i < G.bodies.length; i++) {
+      b = G.bodies[i];
+      if (b.kind === "star") {
+        if (dist(x, y, b.x, b.y) < b.r + pad + 40) return true;
+        continue;
+      }
+      d = dist(x, y, b.x, b.y);
+      if (d < b.r + pad) return true;
+    }
+    return false;
+  }
+  function chaosSpawnRift() {
+    if (!G || G.rifts.length >= CHAOS.riftMax) return;
+    var rng = G.rng, i, x, y, t, tries = 0;
+    while (tries++ < 24) {
+      var ang = rng() * TAU;
+      var rad = 520 + rng() * 2700;
+      x = Math.cos(ang) * rad;
+      y = Math.sin(ang) * rad;
+      if (!chaosNearPlanet(x, y, 100)) break;
+    }
+    t = CHAOS_RIFTS[(rng() * CHAOS_RIFTS.length) | 0];
+    G.rifts.push({ x: x, y: y, t: t.id, life: 14 + rng() * 6, pulse: rng() * TAU });
+  }
+  function chaosApplyBuff(id) {
+    var p = G.player;
+    if (!p || !p.alive) return;
+    p.buff = id;
+    p.buffT = CHAOS.buffT;
+    G.banner = chaosBuffLabel(id);
+    G.bannerT = 2.8;
+    G.bannerAlert = false;
+    G.status = "CHAOS — " + chaosBuffLabel(id);
+    audio.sfxChaosPickup();
+  }
+  function chaosTryRift(p) {
+    var i, r, d;
+    for (i = G.rifts.length - 1; i >= 0; i--) {
+      r = G.rifts[i];
+      d = dist(p.x, p.y, r.x, r.y);
+      if (d < CHAOS.riftPick) {
+        chaosApplyBuff(r.t);
+        G.rifts.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+  function chaosSpawnPod(x, y) {
+    if (!G || G.pods.length >= CHAOS.podMax) return;
+    G.pods.push({ x: x, y: y, life: CHAOS.podLife, wobble: Math.random() * TAU });
+  }
+  function chaosTryPod(p) {
+    var i, pod, d, pull, reward, msg;
+    for (i = G.pods.length - 1; i >= 0; i--) {
+      pod = G.pods[i];
+      d = dist(p.x, p.y, pod.x, pod.y);
+      if (d < CHAOS.podMag && d > 4) {
+        pull = (1 - d / CHAOS.podMag) * 48 * 0.016;
+        pod.x += (p.x - pod.x) / d * pull;
+        pod.y += (p.y - pod.y) / d * pull;
+      }
+      if (d < CHAOS.podPick) {
+        reward = (G.rng() * 3) | 0;
+        if (reward === 0) {
+          p.fuel = Math.min(p.maxFuel, p.fuel + 28);
+          msg = "+FUEL";
+        } else if (reward === 1) {
+          var n = Math.min(6, p.maxArmies - p.armies);
+          p.armies += n;
+          msg = "+" + n + " MARINES";
+        } else {
+          p.shields = Math.min(p.maxShields, p.shields + 22);
+          msg = "SHIELDS TOP-UP";
+        }
+        G.status = "SALVAGE — " + msg;
+        G.banner = "SALVAGE POD — " + msg;
+        G.bannerT = 2.2;
+        audio.sfxChaosPickup();
+        G.pods.splice(i, 1);
+        return true;
+      }
+    }
+    return false;
+  }
+  function chaosOnKill() {
+    if (!G) return;
+    if ((G.streakT || 0) > 0) G.streak = (G.streak || 0) + 1;
+    else G.streak = 1;
+    G.streakT = CHAOS.streakWin;
+    if (G.streak >= 3) {
+      G.streakBoostT = CHAOS.streakBoostT;
+      G.streakPulse = 0.35;
+      G.banner = "STREAK x" + G.streak;
+      G.bannerT = Math.max(G.bannerT || 0, 1.6);
+      var bonus = G.streak >= 5 ? 2 : 1;
+      G.score = (G.score || 0) + bonus;
+      applyPlayerUpgrades(G);
+    }
+  }
+  function chaosPlayerPhantom() {
+    var p = G && G.player;
+    return p && p.alive && p.buff === "phantom" && (p.buffT || 0) > 0;
+  }
+  function chaosPlayerOverdrive() {
+    var p = G && G.player;
+    return p && p.alive && p.buff === "overdrive" && (p.buffT || 0) > 0;
+  }
+  function chaosPlayerSiphon() {
+    var p = G && G.player;
+    return p && p.alive && p.buff === "siphon" && (p.buffT || 0) > 0;
+  }
+  function tickChaos(dt) {
+    if (!G) return;
+    var p = G.player, i;
+    G.riftTimer = (G.riftTimer || 0) - dt;
+    if (G.riftTimer <= 0) {
+      chaosSpawnRift();
+      if (G.rifts.length < CHAOS.riftMax && G.rng() < 0.45) chaosSpawnRift();
+      G.riftTimer = CHAOS.riftRespawn;
+    }
+    for (i = G.rifts.length - 1; i >= 0; i--) {
+      G.rifts[i].life -= dt;
+      G.rifts[i].pulse += dt * 4;
+      if (G.rifts[i].life <= 0) G.rifts.splice(i, 1);
+    }
+    for (i = G.pods.length - 1; i >= 0; i--) {
+      G.pods[i].life -= dt;
+      G.pods[i].wobble += dt * 5;
+      if (G.pods[i].life <= 0) G.pods.splice(i, 1);
+    }
+    if (p && p.alive) {
+      if ((p.buffT || 0) > 0) {
+        p.buffT -= dt;
+        if (p.buffT <= 0) { p.buff = null; p.buffT = 0; }
+      }
+      chaosTryRift(p);
+      chaosTryPod(p);
+    }
+    if ((G.streakT || 0) > 0) {
+      G.streakT -= dt;
+      if (G.streakT <= 0) { G.streak = 0; G.streakT = 0; }
+    }
+    if ((G.streakBoostT || 0) > 0) G.streakBoostT -= dt;
+    if ((G.streakPulse || 0) > 0) G.streakPulse -= dt;
+  }
+  function drawChaosRift(r, wts, zoom) {
+    var s = wts(r.x, r.y);
+    var def = chaosRiftDef(r.t);
+    var pulse = 0.55 + 0.45 * Math.sin(r.pulse || 0);
+    var rad = (16 + pulse * 8) * zoom;
+    ctx.save();
+    ctx.globalAlpha = 0.35 + pulse * 0.25;
+    ctx.strokeStyle = def.color;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, rad, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 0.18 + pulse * 0.12;
+    ctx.fillStyle = def.color;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, rad * 0.55, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawChaosPod(pod, wts, zoom) {
+    var s = wts(pod.x, pod.y);
+    var w = pod.wobble || 0;
+    var sz = 4.5 * zoom;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(w);
+    ctx.fillStyle = "#ffb840";
+    ctx.strokeStyle = "#ffe8a0";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(sz, 0);
+    ctx.lineTo(0, sz);
+    ctx.lineTo(-sz, 0);
+    ctx.lineTo(0, -sz);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
   }
   function maybeSpawnSolBoss() {
     var need = ((G.bossesSpawned || 0) + 1) * 50;
@@ -1305,14 +1525,16 @@
     var a = angTo(e.x, e.y, target.x, target.y);
     var diff = Math.abs(angNorm(a - e.ang));
     var d = dist(e.x, e.y, target.x, target.y);
-    if (d < 220 && diff < 0.28 && e.torpCd <= 0) {
+    var phant = chaosPlayerPhantom();
+    var aimMul = phant ? CHAOS_RIFTS[1].aim : 1;
+    if (d < 220 && diff < 0.28 * aimMul && e.torpCd <= 0) {
       fireTorp(e, "enemy", e.ang, 340, 14 * (e.dmgMul || 1), 0.95);
       e.torpCd = 1.05 + Math.random() * 0.4;
     }
-    if (d < 180 && diff < 0.5 && Math.random() < 0.012) {
+    if (d < 180 && diff < 0.5 * aimMul && Math.random() < (phant ? 0.006 : 0.012)) {
       firePhaser(e, "enemy");
     }
-    if (e.mis > 0 && d < 280 && d > 80 && diff < 0.2 && Math.random() < 0.004) {
+    if (e.mis > 0 && d < 280 && d > 80 && diff < 0.2 * aimMul && Math.random() < (phant ? 0.002 : 0.004)) {
       fireMissile(e, "enemy", target);
       e.mis--;
     }
@@ -1322,7 +1544,8 @@
     if (!e.alive) return;
     var p = G.player;
     var dPlayer = p.alive ? dist(e.x, e.y, p.x, p.y) : 1e9;
-    if (dPlayer < 240) e.huntT = 2.4;
+    var huntR = chaosPlayerPhantom() ? 240 * CHAOS_RIFTS[1].hunt : 240;
+    if (dPlayer < huntR) e.huntT = 2.4;
     if (e.huntT > 0) e.huntT -= dt;
 
     if (e.huntT > 0 && p.alive) {
@@ -1512,9 +1735,11 @@
           b.gunCd = interval;
           var p = G.player;
           if (p.alive && inOrbit(p, b) && b.owner === ENEMY) {
-            fireGun(b, p);
-            G.lastNearFire = 0;
-            audio.beep(110, 0.05, "square", 0.05);
+            if (!chaosPlayerPhantom() || Math.random() < 0.55) {
+              fireGun(b, p);
+              G.lastNearFire = 0;
+              audio.beep(110, 0.05, "square", 0.05);
+            }
           }
           for (var ei = 0; ei < G.enemies.length; ei++) {
             var en = G.enemies[ei];
@@ -1553,6 +1778,7 @@
     }
 
     var sp = warpSpeed(p.warp);
+    if ((G.streakBoostT || 0) > 0 && p.warp > 0) sp *= CHAOS.streakSpeed;
     p.x += Math.cos(p.ang) * sp * dt;
     p.y += Math.sin(p.ang) * sp * dt;
 
@@ -1598,7 +1824,7 @@
       else p.fuel = Math.min(p.maxFuel, p.fuel + 22 * dt);
     }
     if (!safeDock) {
-      p.fuel = Math.min(p.maxFuel, p.fuel + 0.4 * dt);
+      p.fuel = Math.min(p.maxFuel, p.fuel + 0.4 * dt + (chaosPlayerSiphon() ? CHAOS_RIFTS[2].fuel * dt : 0));
     }
 
     if ((just.h) && (p.hyperCd || 0) <= 0 && p.fuel >= 18) {
@@ -1615,7 +1841,8 @@
 
     if (keys.space && p.torpCd <= 0 && countTorps(p) < 6 && p.fuel >= 2) {
       fireTorp(p, "player", p.ang, 420, 20, 1.35);
-      p.torpCd = 0.36;
+      var torpMul = chaosPlayerOverdrive() ? CHAOS_RIFTS[0].torpCd : 1;
+      p.torpCd = 0.36 * torpMul;
       p.fuel = Math.max(0, p.fuel - 2.2);
       if (dock && dock.owner === ENEMY) bombard(dock, 20);
     }
@@ -1624,7 +1851,8 @@
     }
     if ((keys.f || keys.c || pointer.right) && (p.phaserCd || 0) <= 0 && p.fuel >= 6) {
       firePhaser(p, "player");
-      p.phaserCd = 0.42;
+      var phMul = chaosPlayerOverdrive() ? CHAOS_RIFTS[0].phCd : 1;
+      p.phaserCd = 0.42 * phMul;
       p.fuel -= 7;
     }
     if ((just.t || just.control) && p.misCd <= 0 && p.missiles > 0) {
@@ -1902,6 +2130,13 @@
 
     drawParticles(G.particles, dt, worldToScreen, G.zoom);
 
+    if (!G.mapOpen && G.rifts) {
+      for (var ri = 0; ri < G.rifts.length; ri++) drawChaosRift(G.rifts[ri], worldToScreen, G.zoom);
+    }
+    if (!G.mapOpen && G.pods) {
+      for (var poi = 0; poi < G.pods.length; poi++) drawChaosPod(G.pods[poi], worldToScreen, G.zoom);
+    }
+
     for (var ei = 0; ei < G.enemies.length; ei++) {
       var en = G.enemies[ei];
       if (!en.alive) continue;
@@ -1937,7 +2172,9 @@
         ctx.fill();
       } else {
         var flame = p.warp > 0 ? (p.warp >= 7 ? "#6ec8ff" : "#7dff7a") : null;
+        if (chaosPlayerPhantom()) ctx.globalAlpha = 0.52;
         drawShipDart(us.x, us.y, p.ang, p.flash > 0 ? "#f4fff0" : "#9dff9a", p.flash > 0, flame);
+        ctx.globalAlpha = 1;
         if (p.shieldsOn && p.shields > 0) {
           ctx.strokeStyle = "rgba(110,200,255," + (0.35 + 0.25 * Math.sin(G.time * 8)) + ")";
           ctx.lineWidth = 1.5;
@@ -2018,11 +2255,18 @@
     var tname = tbody ? tbody.name : "—";
     var town = tbody && tbody.owner ? (tbody.owner === FRIEND ? "FRIEND" : "MANDATE") : "";
     var fp = countPlanets(FRIEND);
+    var chaosLine = "";
+    if (p.buff && (p.buffT || 0) > 0) {
+      chaosLine = "<br><span style='color:" + chaosRiftDef(p.buff).color + "'>BUFF " + chaosBuffLabel(p.buff) + " " + Math.ceil(p.buffT) + "s</span>";
+    }
+    if ((G.streak || 0) >= 2 && (G.streakT || 0) > 0) {
+      chaosLine += "<br><span style='color:#ffc14a'>STREAK x" + G.streak + "</span>";
+    }
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (p.warp > 0 ? p.warp : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(p.fuel, p.maxFuel, 10) + " " + Math.floor(p.fuel) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(p.hull, p.maxHull, 10) + " " + Math.floor(p.hull) + "</span><br><b>SHLD</b> <span class='" + shC + "'>" + sh + " " + bar(p.shields, p.maxShields, 8) + "</span></div>" +
       "<div class='cell'><b>MARINES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
-      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span></div>";
+      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span>" + chaosLine + "</div>";
     if (G.bannerT > 0) {
       el.banner.textContent = G.banner;
       el.banner.className = G.bannerAlert ? "alert" : "";
@@ -2473,6 +2717,10 @@
     G.time += sdt;
     G.bannerT = Math.max(0, G.bannerT - dt);
     G.rumble = Math.max(0, G.rumble - dt);
+    if (G.streakPulse > 0 && !G.mapOpen) {
+      G.camX += (Math.random() - 0.5) * 3 * G.streakPulse;
+      G.camY += (Math.random() - 0.5) * 3 * G.streakPulse;
+    }
     if (G.phaserFlash) G.phaserFlash.t = Math.max(0, G.phaserFlash.t - dt);
 
     updateBodies(sdt);
@@ -2480,6 +2728,7 @@
     for (var i = 0; i < G.enemies.length; i++) updateEnemy(G.enemies[i], sdt);
     tickEnemyRespawn(sdt);
     updateProjectiles(sdt);
+    tickChaos(sdt);
     maybeSpawnSolBoss();
     solMusicThreat();
     updateCamera(dt);
@@ -3437,6 +3686,22 @@
         GX.bannerT = 3;
         audio.beep(520, 0.1, "square", 0.16);
       }
+      if (e.k === "rift" && e.sid === GX.id) {
+        GX.banner = e.n || "RIFT BUFF";
+        GX.bannerT = 2.8;
+        GX.status = "CHAOS — " + GX.banner;
+        audio.sfxChaosPickup();
+      }
+      if (e.k === "pod" && e.sid === GX.id) {
+        GX.banner = "SALVAGE — " + (e.m || "PICKUP");
+        GX.bannerT = 2.2;
+        GX.status = GX.banner;
+        audio.sfxChaosPickup();
+      }
+      if (e.k === "streak" && e.sid === GX.id) {
+        GX.banner = "STREAK x" + e.n;
+        GX.bannerT = 1.6;
+      }
     }
   }
 
@@ -3498,7 +3763,8 @@
       a: a.a + angNorm(b.a - a.a) * t,
       w: b.w, h: b.h, H: b.H, f: b.f, F: b.F, m: b.m, M: b.M,
       s: b.s, S: b.S, v: b.v, i: b.i, z: b.z, ai: b.ai, el: b.el,
-      k: b.k, u: b.u, B: b.B, Q: b.Q
+      k: b.k, u: b.u, B: b.B, Q: b.Q,
+      bf: b.bf, bt: b.bt, sk: b.sk, sb: b.sb
     };
   }
 
@@ -3650,6 +3916,19 @@
     return best;
   }
 
+  function gxBuffName(c) {
+    if (c === "o") return "CRIMSON OVERDRIVE";
+    if (c === "p") return "CYAN PHANTOM";
+    if (c === "s") return "GOLD SIPHON";
+    return "";
+  }
+  function gxBuffColor(c) {
+    if (c === "o") return CHAOS_RIFTS[0].color;
+    if (c === "p") return CHAOS_RIFTS[1].color;
+    if (c === "s") return CHAOS_RIFTS[2].color;
+    return "#ffc14a";
+  }
+
   function gxDraw(dt, st, me) {
     ctx.fillStyle = "#020503";
     ctx.fillRect(0, 0, viewW, viewH);
@@ -3740,6 +4019,18 @@
 
     drawParticles(GX.particles, dt, gxWTS, GX.zoom);
 
+    if (!GX.mapOpen && st.rf) {
+      for (i = 0; i < st.rf.length; i++) {
+        var rf = st.rf[i];
+        drawChaosRift({ x: rf[0], y: rf[1], t: CHAOS_RIFTS[rf[2] || 0].id, pulse: (st.t || 0) * 4 + i }, gxWTS, GX.zoom);
+      }
+    }
+    if (!GX.mapOpen && st.sp) {
+      for (i = 0; i < st.sp.length; i++) {
+        drawChaosPod({ x: st.sp[i][0], y: st.sp[i][1], wobble: (st.t || 0) * 5 + i }, gxWTS, GX.zoom);
+      }
+    }
+
     var sh = st.sh || [];
     for (i = 0; i < sh.length; i++) {
       var ship = gxLerpShip(sh[i].id);
@@ -3758,7 +4049,9 @@
         var flame = ship.w > 0 ? rc.engine : null;
         var bscale = ship.B ? 1.4 : 1;
         var col = ship.z > 0 ? "#fff" : (ship.B ? "#ffb020" : rc.color);
+        if (ship.bf === "p") ctx.globalAlpha = 0.52;
         drawShipDart(es.x, es.y, ship.a, col, ship.z > 0, flame, bscale);
+        ctx.globalAlpha = 1;
         if (me && ship.r === me.r && ship.id !== me.id && !ship.B) {
           ctx.strokeStyle = rc.color;
           ctx.globalAlpha = 0.7;
@@ -3814,11 +4107,18 @@
     var town = tbody ? (tbody.o === "N" ? "NEUTRAL" : ((RACE[tbody.o] && RACE[tbody.o].name) || "")) : "";
     var sc = st.sc || {};
     var own = sc[me.r] || 0;
+    var chaosLine = "";
+    if (me.bf && (me.bt || 0) > 0) {
+      chaosLine = "<br><span style='color:" + gxBuffColor(me.bf) + "'>BUFF " + gxBuffName(me.bf) + " " + Math.ceil(me.bt) + "s</span>";
+    }
+    if ((me.sk || 0) >= 2) {
+      chaosLine += "<br><span style='color:#ffc14a'>STREAK x" + me.sk + "</span>";
+    }
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 140, 10) + " " + Math.floor(me.f) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(me.h, me.H || 100, 10) + " " + Math.floor(me.h) + "</span><br><b>SHLD</b> " + sh + " " + bar(me.S || 0, me.Q || 70, 8) + "</div>" +
       "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "  <b>TIER</b> T" + (me.u || 0) + ((me.u || 0) ? " +" + (me.u * 10) + "%" : "") + "<br><b>MARINES</b> " + me.m + "/" + me.M + "</div>" +
-      "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span></div>";
+      "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span>" + chaosLine + "</div>";
     if (GX.bannerT > 0) {
       el.banner.textContent = GX.banner;
       el.banner.className = "";
