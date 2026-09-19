@@ -26,6 +26,36 @@
     streakWin: 6, streakBoostT: 2, streakSpeed: 1.22,
     podDrop: 0.45, podMax: 6, podLife: 20, podPick: 22, podMag: 34
   };
+  var ARCADE = {
+    afterSpd: 1.52, afterFuel: 3.1,
+    empRad: 150, empDisable: 2.6, empCd: 24,
+    tractorMag: 78, tractorPull: 1.65,
+    wingCost: 15, wingLife: 48, wingStreak: 5,
+    mineDmg: 22, mineRad: 9, mineMax: 14,
+    stormSlow: 0.55, contractRad: 36, contractTime: 90
+  };
+  var DAILY_RULES = [
+    { id: "thirst", name: "THIRSTY VOID", fuelMul: 2 },
+    { id: "plunder", name: "RICH DRIFT", podMul: 1.55 },
+    { id: "fury", name: "ANGRY PATROL", respawnMul: 0.55 },
+    { id: "marks", name: "MARKED SKIES", killBonus: 1 },
+    { id: "ion", name: "ION SEASON", stormMul: 2.5 }
+  ];
+  function dailyRuleGx() {
+    var d = new Date();
+    var key = (d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()) >>> 0;
+    key = ((key * 1664525 + 1013904223) >>> 0);
+    return DAILY_RULES[key % DAILY_RULES.length];
+  }
+  function dailyFuelMulGx(g) {
+    return (g && g.daily && g.daily.fuelMul) ? g.daily.fuelMul : 1;
+  }
+  function dailyPodMulGx(g) {
+    return (g && g.daily && g.daily.podMul) ? g.daily.podMul : 1;
+  }
+  function dailyKillBonusGx(g) {
+    return (g && g.daily && g.daily.killBonus) ? g.daily.killBonus : 0;
+  }
 
   var RACES = {
     helios: {
@@ -190,6 +220,9 @@
     this.rifts = [];
     this.pods = [];
     this.riftTimer = 6;
+    this.contracts = [];
+    this.mines = [];
+    this.daily = dailyRuleGx();
     if (humans.length) {
       for (i = 0; i < humans.length; i++) {
         p = humans[i];
@@ -364,6 +397,10 @@
     this.rifts = [];
     this.pods = [];
     this.riftTimer = 6;
+    this.contracts = [];
+    this.mines = [];
+    this.daily = dailyRuleGx();
+    this.initArcadeGx();
     present = {};
     for (id in this.players) {
       p = this.players[id];
@@ -501,22 +538,26 @@
     for (i = this.pods.length - 1; i >= 0; i--) {
       pod = this.pods[i];
       d = dist(p.x, p.y, pod.x, pod.y);
-      if (d < CHAOS.podMag && d > 4) {
-        pull = (1 - d / CHAOS.podMag) * 48 * DT;
+      var podMag = (p.inp && p.inp.tr) ? ARCADE.tractorMag : CHAOS.podMag;
+      var pullMul = (p.inp && p.inp.tr) ? ARCADE.tractorPull : 1;
+      if (d < podMag && d > 4) {
+        pull = (1 - d / podMag) * 48 * DT * pullMul;
         pod.x += (p.x - pod.x) / d * pull;
         pod.y += (p.y - pod.y) / d * pull;
       }
       if (d < CHAOS.podPick) {
         reward = (Math.random() * 3) | 0;
+        var podBonus = dailyPodMulGx(this);
         if (reward === 0) {
-          p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + 28);
+          p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + 28 * podBonus);
           msg = "+FUEL";
         } else if (reward === 1) {
           n = Math.min(6, (p.maxArmies || 28) - (p.armies || 0));
+          n = Math.max(1, Math.round(n * podBonus));
           p.armies = (p.armies || 0) + n;
           msg = "+" + n + " MARINES";
         } else {
-          p.shields = Math.min(p.maxShields, (p.shields || 0) + 22);
+          p.shields = Math.min(p.maxShields, (p.shields || 0) + 22 * podBonus);
           msg = "SHIELDS TOP-UP";
         }
         this.emit("pod", { sid: p.id, m: msg });
@@ -543,6 +584,150 @@
 
   Game.prototype.chaosHasBuff = function (p, id) {
     return p && p.alive && p.buff === id && (p.buffT || 0) > 0;
+  };
+
+  Game.prototype.initArcadeGx = function () {
+    var i, b, n = 2;
+    for (i = 0; i < this.planets.length && n > 0; i++) {
+      b = this.planets[i];
+      if (Math.random() < 0.18 * (this.daily && this.daily.stormMul ? this.daily.stormMul : 1)) {
+        b.storm = 1;
+        n--;
+      }
+    }
+    this.arcadeSpawnContract();
+    this.arcadePickBounty();
+  };
+
+  Game.prototype.arcadeSpawnContract = function () {
+    if (this.contracts.length >= 1) return;
+    var x = 200 + Math.random() * 1200;
+    var y = 200 + Math.random() * 1200;
+    var kinds = ["hunt", "haul", "hold"];
+    var kind = kinds[(Math.random() * kinds.length) | 0];
+    this.contracts.push({
+      x: x, y: y, kind: kind, life: ARCADE.contractTime, prog: 0,
+      need: kind === "hunt" ? 2 + ((Math.random() * 2) | 0) : (kind === "haul" ? 10 : 22),
+      reward: kind === "hunt" ? { fuel: 35, score: 2 } : (kind === "haul" ? { marines: 6, fuel: 18 } : { fuel: 40, score: 3 })
+    });
+  };
+
+  Game.prototype.arcadePickBounty = function () {
+    var list = vals(this.players), i, p;
+    for (i = 0; i < list.length; i++) list[i].bounty = false;
+    list = list.filter(function (q) { return q.alive && !q.boss; });
+    if (!list.length) { this.bountyId = null; return; }
+    p = list[(Math.random() * list.length) | 0];
+    p.bounty = true;
+    this.bountyId = p.id;
+  };
+
+  Game.prototype.arcadeSpawnMine = function (x, y) {
+    if (this.mines.length >= ARCADE.mineMax) return;
+    this.mines.push({ x: x, y: y, life: 55 });
+  };
+
+  Game.prototype.arcadeFireEmp = function (p) {
+    if (!p || !p.alive || (p.empCd || 0) > 0) return;
+    p.empCd = ARCADE.empCd;
+    var list = vals(this.players), i, o, n = 0;
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      if (!o.alive || o.id === p.id || !this.hostile(p, o)) continue;
+      if (dist(p.x, p.y, o.x, o.y) < ARCADE.empRad) {
+        o.empT = ARCADE.empDisable;
+        o.flash = 0.25;
+        n++;
+      }
+    }
+    this.emit("emp", { sid: p.id, n: n });
+  };
+
+  Game.prototype.tickArcadeGx = function (dt) {
+    var i, c, m, list = vals(this.players), p, o, j;
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p.alive) continue;
+      p.empCd = Math.max(0, (p.empCd || 0) - dt);
+      if (p.inp && p.inp.emp && !p.didEmp) this.arcadeFireEmp(p);
+      p.didEmp = !!(p.inp && p.inp.emp);
+      if ((p.wingLife || 0) > 0) {
+        p.wingLife -= dt;
+        p.wingCd = Math.max(0, (p.wingCd || 0) - dt);
+        if (p.wingCd <= 0) {
+          for (j = 0; j < list.length; j++) {
+            o = list[j];
+            if (!o.alive || !this.hostile(p, o)) continue;
+            if (dist(p.x, p.y, o.x, o.y) < 200) {
+              this.hitShip(o, 9, p.id);
+              p.wingCd = 0.55;
+              break;
+            }
+          }
+        }
+      }
+    }
+    for (i = this.contracts.length - 1; i >= 0; i--) {
+      c = this.contracts[i];
+      c.life -= dt;
+      if (c.life <= 0) { this.contracts.splice(i, 1); this.arcadeSpawnContract(); continue; }
+      for (j = 0; j < list.length; j++) {
+        p = list[j];
+        if (!p.alive || p.ai) continue;
+        if (dist(p.x, p.y, c.x, c.y) > ARCADE.contractRad + 80) continue;
+        if (c.kind === "hold" && dist(p.x, p.y, c.x, c.y) < ARCADE.contractRad + 20) c.prog += dt;
+        if (c.kind === "haul" && dist(p.x, p.y, c.x, c.y) < ARCADE.contractRad && (p.armies || 0) >= c.need) c.prog = c.need;
+        if (c.prog >= c.need) {
+          if (c.reward.fuel) p.fuel = Math.min(p.maxFuel, (p.fuel || 0) + c.reward.fuel);
+          if (c.reward.marines) p.armies = Math.min(p.maxArmies || 28, (p.armies || 0) + c.reward.marines);
+          if (c.reward.score) {
+            p.score = (p.score || 0) + c.reward.score;
+            this.applyUpgrade(p);
+          }
+          this.emit("contract", { sid: p.id });
+          this.contracts.splice(i, 1);
+          this.arcadeSpawnContract();
+          break;
+        }
+      }
+    }
+    for (i = this.mines.length - 1; i >= 0; i--) {
+      m = this.mines[i];
+      m.life -= dt;
+      if (m.life <= 0) { this.mines.splice(i, 1); continue; }
+      for (j = 0; j < list.length; j++) {
+        p = list[j];
+        if (!p.alive) continue;
+        if (dist(p.x, p.y, m.x, m.y) < ARCADE.mineRad + 8) {
+          this.hitShip(p, ARCADE.mineDmg, null);
+          this.mines.splice(i, 1);
+          break;
+        }
+      }
+    }
+  };
+
+  Game.prototype.arcadeOnKillGx = function (killer, victim) {
+    var i, c;
+    if (victim && victim.bounty && killer) {
+      killer.score = (killer.score || 0) + 4;
+      this.applyUpgrade(killer);
+      victim.bounty = false;
+      this.emit("bounty", { sid: killer.id });
+    }
+    if (dailyKillBonusGx(this) && killer) {
+      killer.score = (killer.score || 0) + dailyKillBonusGx(this);
+      this.applyUpgrade(killer);
+    }
+    if (killer && Math.random() < 0.14) this.arcadeSpawnMine(victim.x, victim.y);
+    for (i = 0; i < this.contracts.length; i++) {
+      c = this.contracts[i];
+      if (c.kind === "hunt" && killer && !killer.ai) c.prog = Math.min(c.need, (c.prog || 0) + 1);
+    }
+    if (killer && (killer.streak || 0) >= ARCADE.wingStreak && !(killer.wingLife > 0)) {
+      killer.wingLife = ARCADE.wingLife;
+    }
+    if (victim && victim.bounty) this.arcadePickBounty();
   };
 
   Game.prototype.tickChaos = function (dt) {
@@ -639,6 +824,7 @@
   };
 
   Game.prototype.fireTorp = function (ship) {
+    if ((ship.empT || 0) > 0) return;
     if (ship.torpCd > 0 || !ship.alive) return;
     if (ship.fuel < 2.5) return;
     if (this.countInflight(ship.id) >= MAX_TORP_INFLIGHT) return;
@@ -661,6 +847,7 @@
   };
 
   Game.prototype.firePhaser = function (ship) {
+    if ((ship.empT || 0) > 0) return;
     if (ship.phaserCd > 0 || !ship.alive) return;
     if (ship.fuel < 6) return;
     var rs = RACES[ship.race];
@@ -772,6 +959,7 @@
       killer.score = (killer.score || 0) + 1;
       this.applyUpgrade(killer);
       this.chaosOnKill(killer);
+      this.arcadeOnKillGx(killer, ship);
     }
     this.killCount = (this.killCount || 0) + 1;
     if (!wasBoss && Math.random() < CHAOS.podDrop) this.chaosSpawnPod(ship.x, ship.y);
@@ -923,6 +1111,9 @@
       s: !!keys.s,
       u: !!keys.u,
       rp: !!(keys.rp || keys.r),
+      ab: !!(keys.ab || keys.shift),
+      emp: !!(keys.emp),
+      tr: !!(keys.tr || keys.t),
       w: keys.w
     };
     if (keys.w != null) {
@@ -1074,16 +1265,23 @@
       p.shieldsOn = false;
     }
 
+    p.empT = Math.max(0, (p.empT || 0) - dt);
     var sp = warpSpeed(p.warp || 0, rs.speed, p.fuel || 0);
     if ((p.streakBoostT || 0) > 0 && (p.warp || 0) > 0) sp *= CHAOS.streakSpeed;
+    var afterOn = inp.ab && (p.warp || 0) > 0 && (p.fuel || 0) > 2;
+    if (afterOn) sp *= ARCADE.afterSpd;
+    var dock = this.orbiting(p);
+    if (dock && dock.storm) sp *= ARCADE.stormSlow;
     p.x += Math.cos(p.ang) * sp * dt;
     p.y += Math.sin(p.ang) * sp * dt;
     p.x = clamp(p.x, -80, 1680);
     p.y = clamp(p.y, -80, 1680);
 
-    p.fuel -= fuelBurn(p.warp || 0, p.shieldsOn) * dt;
+    var burn = fuelBurn(p.warp || 0, p.shieldsOn) * dailyFuelMulGx(this);
+    if (afterOn) burn += fuelBurn(p.warp || 0, false) * (ARCADE.afterFuel - 1);
+    p.fuel -= burn * dt;
 
-    var dock = this.orbiting(p);
+    dock = this.orbiting(p);
     if (dock && dock.owner === p.race) {
       var rate = dock.classM ? 22.0 : 5.5;
       p.fuel = Math.min(p.maxFuel, p.fuel + rate * dt);
@@ -1306,6 +1504,7 @@
     this.updateTorps(dt);
     this.updatePlanets(dt);
     this.tickChaos(dt);
+    this.tickArcadeGx(dt);
     if (this.tickN % 8 === 0) this.checkOutcome();
     this.sweepStale();
   };
@@ -1333,7 +1532,7 @@
 
   Game.prototype.stateJson = function (pid) {
     if (this.phase === "lobby") return this.lobbyJson();
-    var ships = [], list = vals(this.players), i, p, b, rec, sc;
+    var ships = [], list = vals(this.players), i, p, b, rec, sc, c, m;
     for (i = 0; i < list.length; i++) {
       p = list[i];
       if (!p.race) continue;
@@ -1364,6 +1563,9 @@
         ships[ships.length - 1].sk = p.streak | 0;
       }
       if ((p.streakBoostT || 0) > 0) ships[ships.length - 1].sb = r1(p.streakBoostT);
+      if ((p.empCd || 0) > 0) ships[ships.length - 1].ec = r1(p.empCd);
+      if ((p.wingLife || 0) > 0) ships[ships.length - 1].wg = r1(p.wingLife);
+      if (p.bounty) ships[ships.length - 1].by = 1;
     }
     var planets = [];
     for (i = 0; i < this.planets.length; i++) {
@@ -1375,6 +1577,7 @@
         k: b.seat ? 1 : 0, col: b.color
       };
       if (b.battle) rec.b = { s: b.battle.side, a: b.battle.atk | 0 };
+      if (b.storm) rec.sw = 1;
       planets.push(rec);
     }
     var torps = [];
@@ -1416,6 +1619,21 @@
     };
     if (rf.length) out.rf = rf;
     if (sp.length) out.sp = sp;
+    if (this.daily) out.dm = this.daily.name;
+    if (this.contracts.length) {
+      out.ct = [];
+      for (i = 0; i < this.contracts.length; i++) {
+        c = this.contracts[i];
+        out.ct.push([r1(c.x), r1(c.y), c.kind.charAt(0), r1(c.prog), c.need | 0]);
+      }
+    }
+    if (this.mines.length) {
+      out.mn = [];
+      for (i = 0; i < this.mines.length; i++) {
+        m = this.mines[i];
+        out.mn.push([r1(m.x), r1(m.y)]);
+      }
+    }
     return out;
   };
 

@@ -85,6 +85,22 @@ Explosions use particles, shock rings, and debris (about 30% larger than before)
 ## Score and upgrades
 HUD always shows **SCORE** (1 per enemy ship destroyed) and **TIER**. At 10/20/30/40/50 kills your max energy and shields are 10/20/30/40/50% above the ship baseline (not stacked on the previous bonus). A visibly larger **BOSS** (40% stronger) spawns at 50 kills, then every +50. SOL hall of fame records score with the time. GALAXY score/upgrades are per player; the host spawns bosses.
 
+## ARCADE PACK (SOL + GALAXY host)
+Optional juice on top of the core war loop. GALAXY runs these on the host tab (MQTT/LAN unchanged).
+
+| Feature | Use |
+| --- | --- |
+| **Contract beacons** | Cyan square beacon in open space. Fly in: **HUNT** (kill ships), **HAUL** (10+ marines aboard), or **HOLD** (stay ~22s). Fuel/marines/score reward; new contract spawns after. |
+| **Afterburner** | Hold **Shift** while warping — faster travel, heavy extra fuel burn. |
+| **Minefield pods** | Orange spikes — rare drops from kills; Mandate worlds may seed one. Touch = hull damage. |
+| **Wingman drone** | Auto at **STREAK x5**, or **V** in SOL to spend **15 score**. Short-lived escort that chips nearby enemies. |
+| **Planet storms** | Faint ion ring on some worlds — ships in orbit move slower. |
+| **Bounty targets** | One elite ship marked **$** — **+4 score** when destroyed. |
+| **Tractor scoop** | **Hold T** (quick tap still fires tracking missile in SOL) — pulls salvage pods from farther. |
+| **EMP pulse** | **E** — ~24s cooldown; glitches hostile ships in range (~2.6s, no guns). |
+| **Stingers** | Short procedural fanfare on capture and hot kill streaks. |
+| **Daily mutator** | Title screen shows today’s rule (UTC): thirsty void, rich drift, angry patrol, marked skies, or ion season. |
+
 ## CHAOS CIRCUIT
 Arcade juice layered on top of the core war loop (SOL local; GALAXY host-authoritative):
 
@@ -102,7 +118,10 @@ Arcade juice layered on top of the core war loop (SOL local; GALAXY host-authori
 | `F` / `C` / right-click | Phasers (cone, instant, costs fuel) |
 | `X` / `G` | Detonate your photons (AoE) |
 | `H` | Hyperjump / hop |
-| `T` | Tracking missile (**SOL only**) |
+| `T` | Hold: tractor scoop. Quick tap: tracking missile (**SOL only**) |
+| `Shift` | Afterburner (extra speed, burns fuel) |
+| `E` | EMP pulse (cooldown) |
+| `V` | Hire wingman drone for 15 score (**SOL**) |
 | `S` | Shields on/off (drains fuel) |
 | `B` | Beam marines up (friendly orbit) or down (hostile/neutral). Hold to keep transferring. |
 | `U` | Extra refuel in friendly orbit (auto-refuel already runs there) |

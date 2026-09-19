@@ -35,6 +35,52 @@
     podDrop: 0.45, podMax: 6, podLife: 20, podPick: 22, podMag: 34
   };
 
+  /* ARCADE PACK — contracts, afterburner, mines, wingman, storms, bounty, tractor, EMP, stingers, daily */
+  var ARCADE = {
+    afterSpd: 1.52, afterFuel: 3.1,
+    empRad: 150, empDisable: 2.6, empCd: 24,
+    tractorDelay: 0.24, tractorMag: 78, tractorPull: 1.65,
+    wingCost: 15, wingLife: 48, wingStreak: 5,
+    mineDmg: 22, mineRad: 9, mineMax: 14,
+    stormSlow: 0.55, stormChance: 0.22,
+    contractRad: 36, contractTime: 90
+  };
+  var DAILY_RULES = [
+    { id: "thirst", name: "THIRSTY VOID", desc: "Double fuel burn while moving", fuelMul: 2 },
+    { id: "plunder", name: "RICH DRIFT", desc: "Salvage pods pay out more", podMul: 1.55 },
+    { id: "fury", name: "ANGRY PATROL", desc: "Mandate sorties return faster", respawnMul: 0.55 },
+    { id: "marks", name: "MARKED SKIES", desc: "+1 score on every ship kill", killBonus: 1 },
+    { id: "ion", name: "ION SEASON", desc: "Extra ion storms on worlds", stormMul: 2.5 }
+  ];
+  var CONTRACT_TYPES = ["hunt", "haul", "hold"];
+
+  function dailyRule() {
+    var d = new Date();
+    var key = ((d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()) >>> 0);
+    var rng = mulberry32(key);
+    return DAILY_RULES[Math.floor(rng() * DAILY_RULES.length) % DAILY_RULES.length];
+  }
+  function dailyFuelMul() {
+    var r = G && G.daily;
+    return (r && r.fuelMul) ? r.fuelMul : 1;
+  }
+  function dailyPodMul() {
+    var r = G && G.daily;
+    return (r && r.podMul) ? r.podMul : 1;
+  }
+  function dailyRespawnMul() {
+    var r = G && G.daily;
+    return (r && r.respawnMul) ? r.respawnMul : 1;
+  }
+  function dailyKillBonus() {
+    var r = G && G.daily;
+    return (r && r.killBonus) ? r.killBonus : 0;
+  }
+  function dailyStormMul() {
+    var r = G && G.daily;
+    return (r && r.stormMul) ? r.stormMul : 1;
+  }
+
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function dist(ax, ay, bx, by) {
@@ -400,6 +446,21 @@
       this.beep(520, 0.05, "square", 0.14);
       this.beep(780, 0.07, "square", 0.12);
       this.beep(1040, 0.06, "sine", 0.09);
+    },
+    sfxStinger: function (kind) {
+      var self = this;
+      this._playSfx(function () {
+        if (kind === "capture") {
+          self.beep(392, 0.08, "square", 0.16);
+          self.beep(523, 0.1, "square", 0.14);
+          self.beep(659, 0.14, "sine", 0.12);
+          self.beep(784, 0.18, "triangle", 0.1);
+        } else {
+          self.beep(440, 0.06, "square", 0.14);
+          self.beep(554, 0.08, "square", 0.12);
+          self.beep(698, 0.12, "sawtooth", 0.1);
+        }
+      });
     }
   };
 
@@ -476,6 +537,8 @@
   var screen = "title";
   var menuIndex = 0;
   var keys = Object.create(null);
+  var tKeyDownAt = 0;
+  var gxEmpPulse = false;
   var just = Object.create(null);
   var pointer = { x: 0, y: 0, down: false, clicked: false };
   var lastTs = 0;
@@ -656,7 +719,8 @@
       flash: 0,
       invuln: 1.6,
       score: (g.score || 0),
-      buff: null, buffT: 0
+      buff: null, buffT: 0,
+      empCd: 0
     };
     applyPlayerUpgrades(g);
   }
@@ -705,6 +769,7 @@
       streak: 0, streakT: 0, streakBoostT: 0, streakPulse: 0
     };
     spawnEnemies(g);
+    initArcadeState(g);
     resetPlayer(g, map.earth, true);
     g.camX = g.player.x;
     g.camY = g.player.y;
@@ -715,6 +780,7 @@
     } catch (e) {}
     bubbleEvent("Ship computer Bubble online. Advice quality: recreational.");
     g.banner = "RF-1 OVER EARTH — EUROPA STILL FREE IN THE JOVIAN DARK";
+    if (g.daily) g.banner = "TODAY: " + g.daily.name + " — " + g.daily.desc;
     resize();
     paintSide();
     paintHud();
@@ -922,6 +988,7 @@
     en._scored = true;
     G.score = (G.score || 0) + 1;
     chaosOnKill();
+    arcadeOnSolKill(en);
     applyPlayerUpgrades(G);
     if (G.rng() < CHAOS.podDrop) chaosSpawnPod(en.x, en.y);
   }
@@ -995,22 +1062,26 @@
     for (i = G.pods.length - 1; i >= 0; i--) {
       pod = G.pods[i];
       d = dist(p.x, p.y, pod.x, pod.y);
-      if (d < CHAOS.podMag && d > 4) {
-        pull = (1 - d / CHAOS.podMag) * 48 * 0.016;
+      var podMag = tractorActive(p) ? ARCADE.tractorMag : CHAOS.podMag;
+      var pullMul = tractorActive(p) ? ARCADE.tractorPull : 1;
+      if (d < podMag && d > 4) {
+        pull = (1 - d / podMag) * 48 * 0.016 * pullMul;
         pod.x += (p.x - pod.x) / d * pull;
         pod.y += (p.y - pod.y) / d * pull;
       }
       if (d < CHAOS.podPick) {
         reward = (G.rng() * 3) | 0;
+        var podBonus = dailyPodMul();
         if (reward === 0) {
-          p.fuel = Math.min(p.maxFuel, p.fuel + 28);
+          p.fuel = Math.min(p.maxFuel, p.fuel + 28 * podBonus);
           msg = "+FUEL";
         } else if (reward === 1) {
           var n = Math.min(6, p.maxArmies - p.armies);
+          n = Math.min(p.maxArmies - p.armies, Math.max(1, Math.round(n * podBonus)));
           p.armies += n;
           msg = "+" + n + " MARINES";
         } else {
-          p.shields = Math.min(p.maxShields, p.shields + 22);
+          p.shields = Math.min(p.maxShields, p.shields + 22 * podBonus);
           msg = "SHIELDS TOP-UP";
         }
         G.status = "SALVAGE — " + msg;
@@ -1036,6 +1107,7 @@
       var bonus = G.streak >= 5 ? 2 : 1;
       G.score = (G.score || 0) + bonus;
       applyPlayerUpgrades(G);
+      audio.sfxStinger("streak");
     }
   }
   function chaosPlayerPhantom() {
@@ -1050,6 +1122,270 @@
     var p = G && G.player;
     return p && p.alive && p.buff === "siphon" && (p.buffT || 0) > 0;
   }
+
+  function initArcadeState(g) {
+    g.daily = dailyRule();
+    g.contracts = [];
+    g.mines = [];
+    g.wingman = null;
+    g.bountyId = null;
+    g.stormBodies = [];
+    var rng = g.rng, i, b, nStorm;
+    nStorm = Math.floor(1 + rng() * 2 * dailyStormMul());
+    for (i = 0; i < g.bodies.length && nStorm > 0; i++) {
+      b = g.bodies[i];
+      if (b.kind !== "planet") continue;
+      if (rng() < ARCADE.stormChance * dailyStormMul()) {
+        g.stormBodies.push(b.id);
+        nStorm--;
+      }
+    }
+    arcadeSpawnContract(g);
+    arcadePickBounty(g);
+  }
+  function arcadeSpawnContract(g) {
+    if (!g || g.contracts.length >= 1) return;
+    var rng = g.rng, x, y, tries = 0, kind;
+    while (tries++ < 20) {
+      var ang = rng() * TAU;
+      var rad = 400 + rng() * 2200;
+      x = Math.cos(ang) * rad;
+      y = Math.sin(ang) * rad;
+      if (!chaosNearPlanet(x, y, 110)) break;
+    }
+    kind = CONTRACT_TYPES[(rng() * CONTRACT_TYPES.length) | 0];
+    var c = {
+      x: x, y: y, kind: kind, life: ARCADE.contractTime, pulse: 0,
+      prog: 0, need: kind === "hunt" ? 2 + ((rng() * 2) | 0) : (kind === "haul" ? 10 : 22)
+    };
+    c.reward = kind === "hunt" ? { fuel: 35, score: 2 } : (kind === "haul" ? { marines: 6, fuel: 18 } : { fuel: 40, score: 3 });
+    g.contracts.push(c);
+  }
+  function arcadePickBounty(g) {
+    var i, e, list = [];
+    for (i = 0; i < g.enemies.length; i++) {
+      e = g.enemies[i];
+      if (e.alive && !e.boss) list.push(e);
+    }
+    if (!list.length) { g.bountyId = null; return; }
+    e = list[(g.rng() * list.length) | 0];
+    e.bounty = true;
+    g.bountyId = e.id;
+  }
+  function arcadeTryWingman(p, auto) {
+    if (!G || !p || !p.alive) return;
+    if (G.wingman && G.wingman.life > 0) return;
+    if (!auto) {
+      if ((G.score || 0) < ARCADE.wingCost) {
+        G.status = "NEED " + ARCADE.wingCost + " SCORE FOR WINGMAN";
+        return;
+      }
+      G.score -= ARCADE.wingCost;
+      applyPlayerUpgrades(G);
+    }
+    G.wingman = { ang: p.ang, cd: 0, life: ARCADE.wingLife };
+    G.banner = "WINGMAN ONLINE";
+    G.bannerT = 2.4;
+    G.status = "ESCORT DRONE DEPLOYED";
+    audio.sfxChaosPickup();
+  }
+  function arcadeFireEmp() {
+    var p = G.player;
+    if (!p || !p.alive || (p.empCd || 0) > 0) return;
+    p.empCd = ARCADE.empCd;
+    var i, e, n = 0;
+    for (i = 0; i < G.enemies.length; i++) {
+      e = G.enemies[i];
+      if (!e.alive) continue;
+      if (dist(p.x, p.y, e.x, e.y) < ARCADE.empRad) {
+        e.empT = ARCADE.empDisable;
+        e.flash = 0.25;
+        n++;
+      }
+    }
+    burst(p.x, p.y, 18, "#9ae8ff", 70, false);
+    audio.beep(120, 0.2, "sawtooth", 0.16, 90);
+    audio.noise(0.12, 0.14);
+    G.status = n ? "EMP — " + n + " SHIPS GLITCHED" : "EMP PULSE (CLEAR)";
+    G.banner = "ION BURST";
+    G.bannerT = 1.6;
+  }
+  function arcadeSpawnMine(x, y) {
+    if (!G || G.mines.length >= ARCADE.mineMax) return;
+    G.mines.push({ x: x, y: y, life: 55, pulse: Math.random() * TAU });
+  }
+  function arcadeBodyStorm(b) {
+    return G && G.stormBodies && G.stormBodies.indexOf(b.id) >= 0;
+  }
+  function tractorActive(p) {
+    return p && keys.t && (performance.now() - tKeyDownAt) > ARCADE.tractorDelay * 1000;
+  }
+  function tickArcade(dt) {
+    if (!G) return;
+    var p = G.player, i, c, e, m, w;
+    if (p && p.alive) {
+      p.empCd = Math.max(0, (p.empCd || 0) - dt);
+      if (just.e) arcadeFireEmp();
+      if (just.v) arcadeTryWingman(p, false);
+    }
+    if (G.wingman) {
+      G.wingman.life -= dt;
+      if (!p || !p.alive || G.wingman.life <= 0) G.wingman = null;
+      else {
+        w = G.wingman;
+        var wx = p.x - Math.cos(p.ang) * 34 + Math.sin(p.ang) * 22;
+        var wy = p.y - Math.sin(p.ang) * 34 - Math.cos(p.ang) * 22;
+        w.ang = angTo(wx, wy, p.x, p.y);
+        w.cd -= dt;
+        if (w.cd <= 0) {
+          for (i = 0; i < G.enemies.length; i++) {
+            e = G.enemies[i];
+            if (!e.alive) continue;
+            if (dist(wx, wy, e.x, e.y) < 200) {
+              hitShip(e, 9, false);
+              burst(e.x, e.y, 4, "#7dff9a", 25);
+              w.cd = 0.55;
+              break;
+            }
+          }
+        }
+      }
+    }
+    for (i = G.contracts.length - 1; i >= 0; i--) {
+      c = G.contracts[i];
+      c.life -= dt;
+      c.pulse += dt * 3;
+      if (c.life <= 0) { G.contracts.splice(i, 1); arcadeSpawnContract(G); continue; }
+      if (!p || !p.alive) continue;
+      if (dist(p.x, p.y, c.x, c.y) > ARCADE.contractRad + 80) continue;
+      if (c.kind === "hold") {
+        if (dist(p.x, p.y, c.x, c.y) < ARCADE.contractRad + 20) c.prog += dt;
+      } else if (c.kind === "haul" && dist(p.x, p.y, c.x, c.y) < ARCADE.contractRad) {
+        if (p.armies >= c.need) c.prog = c.need;
+      }
+      if (c.prog >= c.need) {
+        if (c.reward.fuel) p.fuel = Math.min(p.maxFuel, p.fuel + c.reward.fuel);
+        if (c.reward.marines) p.armies = Math.min(p.maxArmies, p.armies + c.reward.marines);
+        if (c.reward.score) {
+          G.score = (G.score || 0) + c.reward.score;
+          applyPlayerUpgrades(G);
+        }
+        G.banner = "CONTRACT COMPLETE";
+        G.bannerT = 2.8;
+        G.status = "BEACON REWARD COLLECTED";
+        audio.sfxStinger("capture");
+        G.contracts.splice(i, 1);
+        arcadeSpawnContract(G);
+      }
+    }
+    for (i = G.mines.length - 1; i >= 0; i--) {
+      m = G.mines[i];
+      m.life -= dt;
+      m.pulse += dt * 6;
+      if (m.life <= 0) { G.mines.splice(i, 1); continue; }
+      if (p && p.alive && dist(p.x, p.y, m.x, m.y) < ARCADE.mineRad + 8) {
+        hitShip(p, ARCADE.mineDmg, true);
+        burst(m.x, m.y, 14, "#ff9040", 55);
+        G.mines.splice(i, 1);
+      }
+      for (var ei = 0; ei < G.enemies.length; ei++) {
+        e = G.enemies[ei];
+        if (!e.alive) continue;
+        if (dist(e.x, e.y, m.x, m.y) < ARCADE.mineRad + 6) {
+          hitShip(e, ARCADE.mineDmg * 0.7, false);
+          burst(m.x, m.y, 10, "#ff9040", 40);
+          G.mines.splice(i, 1);
+          break;
+        }
+      }
+    }
+    if (G.bountyId) {
+      var has = false;
+      for (i = 0; i < G.enemies.length; i++) if (G.enemies[i].id === G.bountyId && G.enemies[i].alive) has = true;
+      if (!has) arcadePickBounty(G);
+    }
+  }
+  function arcadeOnSolKill(en) {
+    if (!G) return;
+    var i, c;
+    if (en && en.bounty) {
+      G.score = (G.score || 0) + 4;
+      applyPlayerUpgrades(G);
+      G.banner = "BOUNTY CLEARED +4";
+      G.bannerT = 2.2;
+      audio.sfxStinger("streak");
+      en.bounty = false;
+    }
+    if (dailyKillBonus()) {
+      G.score = (G.score || 0) + dailyKillBonus();
+      applyPlayerUpgrades(G);
+    }
+    if (G.rng() < 0.14) arcadeSpawnMine(en.x + (G.rng() - 0.5) * 30, en.y + (G.rng() - 0.5) * 30);
+    for (i = 0; i < G.contracts.length; i++) {
+      c = G.contracts[i];
+      if (c.kind === "hunt") c.prog = Math.min(c.need, (c.prog || 0) + 1);
+    }
+    if ((G.streak || 0) >= ARCADE.wingStreak && !G.wingman) arcadeTryWingman(G.player, true);
+  }
+  function arcadeContractProgress(c) {
+    if (!c) return "";
+    if (c.kind === "hunt") return "HUNT " + (c.prog | 0) + "/" + c.need;
+    if (c.kind === "haul") return "HAUL " + c.need + "+ MARINES";
+    return "HOLD " + Math.floor(c.prog) + "/" + c.need + "s";
+  }
+  function drawArcadeOverlay(wts, zoom) {
+    var i, c, m, s, pulse;
+    if (G.contracts) {
+      for (i = 0; i < G.contracts.length; i++) {
+        c = G.contracts[i];
+        s = wts(c.x, c.y);
+        pulse = 0.5 + 0.5 * Math.sin(c.pulse || 0);
+        ctx.save();
+        ctx.strokeStyle = "#6ec8ff";
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.5 + pulse * 0.35;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, (14 + pulse * 6) * zoom, 0, TAU);
+        ctx.stroke();
+        ctx.fillStyle = "#a8e0ff";
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(s.x - 3 * zoom, s.y - 3 * zoom, 6 * zoom, 6 * zoom);
+        ctx.restore();
+      }
+    }
+    if (G.mines) {
+      for (i = 0; i < G.mines.length; i++) {
+        m = G.mines[i];
+        s = wts(m.x, m.y);
+        pulse = 0.5 + 0.5 * Math.sin(m.pulse || 0);
+        ctx.save();
+        ctx.fillStyle = "#ff6020";
+        ctx.globalAlpha = 0.7 + pulse * 0.25;
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y - 5 * zoom);
+        ctx.lineTo(s.x + 4 * zoom, s.y + 4 * zoom);
+        ctx.lineTo(s.x - 4 * zoom, s.y + 4 * zoom);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+    if (G.bodies) {
+      for (i = 0; i < G.bodies.length; i++) {
+        if (!arcadeBodyStorm(G.bodies[i])) continue;
+        s = wts(G.bodies[i].x, G.bodies[i].y);
+        ctx.save();
+        ctx.strokeStyle = "#88a0ff";
+        ctx.globalAlpha = 0.22;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, (G.bodies[i].r + 16) * zoom, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
   function tickChaos(dt) {
     if (!G) return;
     var p = G.player, i;
@@ -1324,6 +1660,7 @@
       G.bannerAlert = false;
       audio.beep(520, 0.12, "square", 0.2);
       audio.beep(740, 0.18, "square", 0.16);
+      audio.sfxStinger("capture");
       if (b.capital) {
         G.banner = "TITAN FALLS — THE MANDATE SEAT IS OURS";
         bubbleEvent("You took their sofa. They will be irritating about it.");
@@ -1521,6 +1858,7 @@
   }
 
   function enemyFire(e, target, dt) {
+    if ((e.empT || 0) > 0) return;
     e.torpCd -= dt;
     var a = angTo(e.x, e.y, target.x, target.y);
     var diff = Math.abs(angNorm(a - e.ang));
@@ -1542,6 +1880,7 @@
 
   function updateEnemy(e, dt) {
     if (!e.alive) return;
+    e.empT = Math.max(0, (e.empT || 0) - dt);
     var p = G.player;
     var dPlayer = p.alive ? dist(e.x, e.y, p.x, p.y) : 1e9;
     var huntR = chaosPlayerPhantom() ? 240 * CHAOS_RIFTS[1].hunt : 240;
@@ -1609,7 +1948,7 @@
       G.banner = e.boss ? "BOSS DESTROYED" : (e.id + " DESTROYED");
       G.bannerT = 2;
       G.bannerAlert = false;
-      e.respawn = 48;
+      e.respawn = 48 * dailyRespawnMul();
     }
   }
 
@@ -1728,6 +2067,10 @@
         }
       }
       if (b.battle) tickBattle(b, dt);
+      if (b.owner === ENEMY && b.kind === "planet" && G.rng() < 0.0008 * dt * 60) {
+        var ma = b.angle + G.rng() * TAU;
+        arcadeSpawnMine(b.x + Math.cos(ma) * (b.r + 20), b.y + Math.sin(ma) * (b.r + 20));
+      }
       if (b.def > 0 && b.owner) {
         b.gunCd -= dt;
         var interval = 1.35 * (10 / (b.def + 4));
@@ -1777,23 +2120,27 @@
       G.status = "FUEL ZERO — IMPULSE ONLY";
     }
 
-    var sp = warpSpeed(p.warp);
-    if ((G.streakBoostT || 0) > 0 && p.warp > 0) sp *= CHAOS.streakSpeed;
-    p.x += Math.cos(p.ang) * sp * dt;
-    p.y += Math.sin(p.ang) * sp * dt;
-
-    var burn = fuelBurn(p.warp, p.shieldsOn);
-    p.fuel -= burn * dt;
-    if (p.fuel < 0) p.fuel = 0;
-    if (p.shieldsOn) {
-      p.shields = Math.min(p.maxShields, p.shields + 6 * dt);
-    }
-
     var near = nearestBody(p.x, p.y, 400);
     if (!G.targetLock && near) G.targetId = near.id;
 
     var dock = near && inOrbit(p, near) ? near : null;
     var safeDock = dock && dock.owner === FRIEND && !underFire();
+
+    var sp = warpSpeed(p.warp);
+    if ((G.streakBoostT || 0) > 0 && p.warp > 0) sp *= CHAOS.streakSpeed;
+    var afterOn = (keys.shift || keys.shiftleft || keys.shiftright) && p.warp > 0 && p.fuel > 2;
+    if (afterOn) sp *= ARCADE.afterSpd;
+    if (dock && arcadeBodyStorm(dock)) sp *= ARCADE.stormSlow;
+    p.x += Math.cos(p.ang) * sp * dt;
+    p.y += Math.sin(p.ang) * sp * dt;
+
+    var burn = fuelBurn(p.warp, p.shieldsOn) * dailyFuelMul();
+    if (afterOn) burn += fuelBurn(p.warp, false) * (ARCADE.afterFuel - 1);
+    p.fuel -= burn * dt;
+    if (p.fuel < 0) p.fuel = 0;
+    if (p.shieldsOn) {
+      p.shields = Math.min(p.maxShields, p.shields + 6 * dt);
+    }
 
     if (safeDock) {
       p.fuel = Math.min(p.maxFuel, p.fuel + 16 * dt);
@@ -1855,7 +2202,10 @@
       p.phaserCd = 0.42 * phMul;
       p.fuel -= 7;
     }
-    if ((just.t || just.control) && p.misCd <= 0 && p.missiles > 0) {
+    if (tractorActive(p)) {
+      G.status = "TRACTOR SCOOP — HOLD T";
+    }
+    if ((just.t || just.control) && !tractorActive(p) && p.misCd <= 0 && p.missiles > 0) {
       var tgt = null, td = 280;
       for (var i = 0; i < G.enemies.length; i++) {
         var en = G.enemies[i];
@@ -2136,6 +2486,7 @@
     if (!G.mapOpen && G.pods) {
       for (var poi = 0; poi < G.pods.length; poi++) drawChaosPod(G.pods[poi], worldToScreen, G.zoom);
     }
+    if (!G.mapOpen) drawArcadeOverlay(worldToScreen, G.zoom);
 
     for (var ei = 0; ei < G.enemies.length; ei++) {
       var en = G.enemies[ei];
@@ -2155,6 +2506,16 @@
           ctx.fillStyle = "#ffc14a";
           ctx.font = "11px Lucida Console, monospace";
           ctx.fillText("BOSS", es.x + 14, es.y - 12);
+        }
+        if (en.bounty) {
+          ctx.strokeStyle = "#ffd040";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(es.x, es.y, 22, 0, TAU);
+          ctx.stroke();
+          ctx.fillStyle = "#ffd040";
+          ctx.font = "10px Lucida Console, monospace";
+          ctx.fillText("$", es.x + 14, es.y - 16);
         }
       }
     }
@@ -2181,6 +2542,11 @@
           ctx.beginPath();
           ctx.arc(us.x, us.y, 18, 0, TAU);
           ctx.stroke();
+        }
+        if (G.wingman && G.wingman.life > 0) {
+          var wx = us.x - Math.cos(p.ang) * 34 + Math.sin(p.ang) * 22;
+          var wy = us.y - Math.sin(p.ang) * 34 - Math.cos(p.ang) * 22;
+          drawShipDart(wx, wy, G.wingman.ang || p.ang, "#7ad4ff", false, null);
         }
       }
     }
@@ -2262,6 +2628,14 @@
     if ((G.streak || 0) >= 2 && (G.streakT || 0) > 0) {
       chaosLine += "<br><span style='color:#ffc14a'>STREAK x" + G.streak + "</span>";
     }
+    var toy = "";
+    if (G.contracts && G.contracts[0]) {
+      toy += "CT " + arcadeContractProgress(G.contracts[0]) + " ";
+    }
+    if ((p.empCd || 0) > 0) toy += "EMP " + Math.ceil(p.empCd) + "s ";
+    else toy += "EMP·E ";
+    if (G.wingman && G.wingman.life > 0) toy += "WING " + Math.ceil(G.wingman.life) + "s ";
+    if (toy) chaosLine += "<br><span style='color:#7a9a7a;font-size:11px'>" + toy + "SHIFT burn · hold T scoop · V hire</span>";
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (p.warp > 0 ? p.warp : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(p.fuel, p.maxFuel, 10) + " " + Math.floor(p.fuel) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(p.hull, p.maxHull, 10) + " " + Math.floor(p.hull) + "</span><br><b>SHLD</b> <span class='" + shC + "'>" + sh + " " + bar(p.shields, p.maxShields, 8) + "</span></div>" +
@@ -2355,6 +2729,10 @@
       else el.galaxyItem.textContent = "[ G ] GALAXY — INTERNET ROOM";
     }
     for (var i = 0; i < items.length; i++) items[i].classList.toggle("sel", i === titleSel);
+    var dr = dailyRule();
+    if (el.titleBubble && dr) {
+      el.titleBubble.textContent = "DAILY MUTATOR — " + dr.name + ": " + dr.desc;
+    }
   }
 
   function toggleMap() {
@@ -2416,7 +2794,8 @@
       return;
     }
     var k = keyName(e);
-    if (!keys[k]) just[k] = true;
+    if (k === "t") tKeyDownAt = performance.now();
+    if (k !== "t" && !keys[k]) just[k] = true;
     keys[k] = true;
     if (playMode === "galaxy" && screen === "game") { gxOnKey(e); return; }
     if (screen === "gxlobby") { gxLobbyKey(e); return; }
@@ -2482,7 +2861,10 @@
     }
   });
   window.addEventListener("keyup", function (e) {
-    keys[keyName(e)] = false;
+    var k = keyName(e);
+    if (k === "t" && tKeyDownAt && performance.now() - tKeyDownAt < 280) just.t = true;
+    if (k === "t") tKeyDownAt = 0;
+    keys[k] = false;
   });
 
   function applyWarpKeys(k) {
@@ -2729,6 +3111,7 @@
     tickEnemyRespawn(sdt);
     updateProjectiles(sdt);
     tickChaos(sdt);
+    tickArcade(sdt);
     maybeSpawnSolBoss();
     solMusicThreat();
     updateCamera(dt);
@@ -2943,6 +3326,8 @@
     return out;
   }
   function gxCollectKeys() {
+    var emp = gxEmpPulse ? 1 : 0;
+    gxEmpPulse = false;
     return {
       l: keys.arrowleft || keys.a ? 1 : 0,
       r: keys.arrowright || keys.d ? 1 : 0,
@@ -2954,6 +3339,9 @@
       s: keys.s ? 1 : 0,
       u: keys.u ? 1 : 0,
       rp: keys.r ? 1 : 0,
+      ab: (keys.shift || keys.shiftleft || keys.shiftright) ? 1 : 0,
+      emp: emp,
+      tr: keys.t ? 1 : 0,
       w: GX.warp
     };
   }
@@ -3685,7 +4073,9 @@
         GX.banner = (e.pid || "WORLD") + " TAKEN";
         GX.bannerT = 3;
         audio.beep(520, 0.1, "square", 0.16);
+        if (e.sid === GX.id) audio.sfxStinger("capture");
       }
+      if (e.k === "streak" && e.sid === GX.id) audio.sfxStinger("streak");
       if (e.k === "rift" && e.sid === GX.id) {
         GX.banner = e.n || "RIFT BUFF";
         GX.bannerT = 2.8;
@@ -3810,6 +4200,7 @@
     if (k === "m") GX.mapOpen = !GX.mapOpen;
     if (k === "l") GX.targetLock = false;
     if (k === "n") toggleAudioMuted();
+    if (k === "e") gxEmpPulse = true;
     if (k === "escape") { /* no pause on host clock */ }
     return true;
   }
@@ -4030,6 +4421,29 @@
         drawChaosPod({ x: st.sp[i][0], y: st.sp[i][1], wobble: (st.t || 0) * 5 + i }, gxWTS, GX.zoom);
       }
     }
+    if (!GX.mapOpen && st.ct) {
+      for (i = 0; i < st.ct.length; i++) {
+        var cti = st.ct[i];
+        var cs = gxWTS(cti[0], cti[1]);
+        ctx.strokeStyle = "#6ec8ff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cs.x, cs.y, 14 * GX.zoom, 0, TAU);
+        ctx.stroke();
+      }
+    }
+    if (!GX.mapOpen && st.mn) {
+      for (i = 0; i < st.mn.length; i++) {
+        var ms = gxWTS(st.mn[i][0], st.mn[i][1]);
+        ctx.fillStyle = "#ff6020";
+        ctx.beginPath();
+        ctx.moveTo(ms.x, ms.y - 5 * GX.zoom);
+        ctx.lineTo(ms.x + 4 * GX.zoom, ms.y + 4 * GX.zoom);
+        ctx.lineTo(ms.x - 4 * GX.zoom, ms.y + 4 * GX.zoom);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
 
     var sh = st.sh || [];
     for (i = 0; i < sh.length; i++) {
@@ -4069,6 +4483,12 @@
         ctx.fillStyle = ship.B ? "#ffc14a" : rc.color;
         ctx.font = ship.B ? "11px Lucida Console, monospace" : "9px Lucida Console, monospace";
         ctx.fillText((ship.B ? "BOSS " : "") + (ship.id === GX.id ? "YOU " : "") + rc.letter + " " + (ship.n || ""), es.x + 10, es.y - 10);
+        if (ship.by) {
+          ctx.strokeStyle = "#ffd040";
+          ctx.beginPath();
+          ctx.arc(es.x, es.y, 22 * bscale, 0, TAU);
+          ctx.stroke();
+        }
       }
     }
 
@@ -4114,6 +4534,13 @@
     if ((me.sk || 0) >= 2) {
       chaosLine += "<br><span style='color:#ffc14a'>STREAK x" + me.sk + "</span>";
     }
+    var toyGx = "";
+    if (st.dm) toyGx += st.dm + " ";
+    if (me.ec) toyGx += "EMP " + Math.ceil(me.ec) + "s ";
+    else toyGx += "EMP·E ";
+    if (me.wg) toyGx += "WING " + Math.ceil(me.wg) + "s ";
+    if (st.ct && st.ct[0]) toyGx += "CT " + st.ct[0][2] + " ";
+    if (toyGx) chaosLine += "<br><span style='color:#7a9a7a;font-size:11px'>" + toyGx + "SHIFT burn · hold T scoop</span>";
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 140, 10) + " " + Math.floor(me.f) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(me.h, me.H || 100, 10) + " " + Math.floor(me.h) + "</span><br><b>SHLD</b> " + sh + " " + bar(me.S || 0, me.Q || 70, 8) + "</div>" +
