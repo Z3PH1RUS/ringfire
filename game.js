@@ -769,11 +769,11 @@
       streak: 0, streakT: 0, streakBoostT: 0, streakPulse: 0
     };
     spawnEnemies(g);
-    initArcadeState(g);
     resetPlayer(g, map.earth, true);
     g.camX = g.player.x;
     g.camY = g.player.y;
     G = g;
+    initArcadeState(g);
     try {
       localStorage.setItem(LS_SEED, String(seed));
       localStorage.setItem(LS_CFG, JSON.stringify({ seed: seed, randomOwn: !!opts.randomOwn }));
@@ -1002,11 +1002,13 @@
     var d = chaosRiftDef(id);
     return d ? d.name : "";
   }
-  function chaosNearPlanet(x, y, pad) {
+  function chaosNearPlanet(x, y, pad, game) {
     pad = pad == null ? 90 : pad;
+    game = game || G;
+    if (!game || !game.bodies) return false;
     var i, b, d;
-    for (i = 0; i < G.bodies.length; i++) {
-      b = G.bodies[i];
+    for (i = 0; i < game.bodies.length; i++) {
+      b = game.bodies[i];
       if (b.kind === "star") {
         if (dist(x, y, b.x, b.y) < b.r + pad + 40) return true;
         continue;
@@ -1151,7 +1153,7 @@
       var rad = 400 + rng() * 2200;
       x = Math.cos(ang) * rad;
       y = Math.sin(ang) * rad;
-      if (!chaosNearPlanet(x, y, 110)) break;
+      if (!chaosNearPlanet(x, y, 110, g)) break;
     }
     kind = CONTRACT_TYPES[(rng() * CONTRACT_TYPES.length) | 0];
     var c = {
