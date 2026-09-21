@@ -2243,17 +2243,24 @@
   /* ---------- camera / resize ---------- */
   function resize() {
     var c = el.canvas;
-    var w = c.clientWidth || (c.parentElement ? c.parentElement.clientWidth - 268 : 800);
-    var h = c.clientHeight || 600;
-    dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!c || !ctx) return;
+    var parent = c.parentElement || el.game;
+    var pw = parent && parent.clientWidth ? parent.clientWidth : 0;
+    var ph = parent && parent.clientHeight ? parent.clientHeight : 0;
+    /* Prefer parent box — canvas often reports 0x0 the instant #game becomes visible. */
+    var w = pw > 40 ? Math.max(40, pw - 268) : (c.clientWidth || 800);
+    var h = ph > 40 ? Math.max(40, ph - 86) : (c.clientHeight || 600);
     if (w < 40) w = 800;
     if (h < 40) h = 500;
+    dpr = Math.min(2, window.devicePixelRatio || 1);
     viewW = w;
     viewH = h;
+    c.style.width = w + "px";
+    c.style.height = h + "px";
     c.width = Math.floor(w * dpr);
     c.height = Math.floor(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (stars.length === 0) seedStars();
+    if (!stars.length) seedStars();
   }
   function seedStars() {
     stars = [];
@@ -2761,9 +2768,24 @@
       newGame({ seed: seed, randomOwn: true });
     }
     lastTs = 0;
-    requestAnimationFrame(function () {
+    function kickDraw() {
       resize();
-      if (G) { G.camX = G.player.x; G.camY = G.player.y; }
+      if (G && G.player) {
+        G.camX = G.player.x;
+        G.camY = G.player.y;
+        try { drawWorld(0.016); paintHud(); paintSide(); } catch (err) {
+          console.error("RINGFIRE draw boot failed", err);
+          if (el.banner) {
+            el.banner.style.opacity = "1";
+            el.banner.textContent = "DISPLAY ERROR — " + (err && err.message ? err.message : err);
+          }
+        }
+      }
+    }
+    /* Two frames so layout exists after #game display:block */
+    requestAnimationFrame(function () {
+      kickDraw();
+      requestAnimationFrame(kickDraw);
     });
   }
 
@@ -3068,6 +3090,7 @@
   /* ---------- loop ---------- */
   function frame(ts) {
     requestAnimationFrame(frame);
+    try {
     if (!lastTs) lastTs = ts;
     var dt = (ts - lastTs) / 1000;
     lastTs = ts;
@@ -3133,6 +3156,16 @@
       paintSide();
     }
     just = Object.create(null);
+    } catch (err) {
+      if (!frame._errLogged) {
+        frame._errLogged = true;
+        console.error("RINGFIRE frame failed", err);
+        if (el.banner) {
+          el.banner.style.opacity = "1";
+          el.banner.textContent = "DISPLAY ERROR — " + (err && err.message ? err.message : err);
+        }
+      }
+    }
   }
 
   window.addEventListener("resize", function () {
