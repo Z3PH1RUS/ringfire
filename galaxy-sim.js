@@ -57,6 +57,33 @@
     return (g && g.daily && g.daily.killBonus) ? g.daily.killBonus : 0;
   }
 
+  var V2 = {
+    nexusX: 800, nexusY: 800,
+    shear: 38000,
+    lensNear: 90,
+    lensFar: 380,
+    lensMul: 1.45,
+    flareRad: 280,
+    flareStart: 2,
+    ripperReach: 200,
+    ripperCd: 42,
+    rouletteCd: 9,
+    rouletteRisk: 0.18,
+    rouletteChip: 8,
+    traceStep: 1.4,
+    traceDepth: 3,
+    traceCd: 5.5,
+    traceFuel: 14,
+    silkT: 0.38,
+    lureLife: 9,
+    lureCd: 11,
+    lurePull: 340,
+    slipKick: 1.1,
+    orbitBoost: 1.18,
+    orbitBand: 44,
+    driftDamp: 0.92
+  };
+
   var RACES = {
     helios: {
       name: "HELIOS", color: "#e8d48a",
@@ -399,6 +426,7 @@
     this.riftTimer = 6;
     this.contracts = [];
     this.mines = [];
+    this.lures = [];
     this.daily = dailyRuleGx();
     this.initArcadeGx();
     present = {};
@@ -595,8 +623,196 @@
         n--;
       }
     }
+    this.lures = [];
     this.arcadeSpawnContract();
     this.arcadePickBounty();
+  };
+
+  Game.prototype.v2PhaseActive = function (p) {
+    return p && p.alive && (p.phaseT || 0) > 0;
+  };
+
+  Game.prototype.v2SolarShear = function (ship, dt) {
+    if (!ship || !ship.alive) return;
+    var dx = V2.nexusX - ship.x, dy = V2.nexusY - ship.y;
+    var d2 = dx * dx + dy * dy;
+    var minD = 42;
+    if (d2 < minD * minD) d2 = minD * minD;
+    var pull = V2.shear / d2;
+    ship.vx = (ship.vx || 0) + dx * pull * dt;
+    ship.vy = (ship.vy || 0) + dy * pull * dt;
+  };
+
+  Game.prototype.v2ApplyDrift = function (ship, dt) {
+    if (!ship || !ship.alive) return;
+    ship.x += (ship.vx || 0) * dt;
+    ship.y += (ship.vy || 0) * dt;
+    var damp = Math.pow(V2.driftDamp, dt * 60);
+    ship.vx = (ship.vx || 0) * damp;
+    ship.vy = (ship.vy || 0) * damp;
+    ship.x = clamp(ship.x, -80, 1680);
+    ship.y = clamp(ship.y, -80, 1680);
+  };
+
+  Game.prototype.v2OrbitKiss = function (ship, dt) {
+    if (!ship.alive || (ship.warp || 0) <= 0) return;
+    var i, b, d, band, tx, ty, tang, dot, sp, rs = RACES[ship.race];
+    if (!rs) return;
+    for (i = 0; i < this.planets.length; i++) {
+      b = this.planets[i];
+      if (!b.classM && !b.seat && b.r < 11) continue;
+      d = dist(ship.x, ship.y, b.x, b.y);
+      band = b.r + V2.orbitBand;
+      if (d > band + 26 || d < b.r + 6) continue;
+      tx = -(ship.y - b.y);
+      ty = ship.x - b.x;
+      tang = Math.atan2(ty, tx);
+      dot = Math.cos(tang - ship.ang);
+      if (Math.abs(dot) < 0.35) continue;
+      sp = warpSpeed(ship.warp || 0, rs.speed, ship.fuel || 0) * (V2.orbitBoost - 1) * dt * 0.85;
+      ship.x += Math.cos(tang) * sp * (dot > 0 ? 1 : -1);
+      ship.y += Math.sin(tang) * sp * (dot > 0 ? 1 : -1);
+    }
+  };
+
+  Game.prototype.v2LensMul = function (p) {
+    if (!p || !p.alive) return 1;
+    var d = dist(p.x, p.y, V2.nexusX, V2.nexusY);
+    if (d >= V2.lensFar) return 1;
+    if (d <= V2.lensNear) return V2.lensMul;
+    return V2.lensMul + (1 - V2.lensMul) * ((d - V2.lensNear) / (V2.lensFar - V2.lensNear));
+  };
+
+  Game.prototype.v2TrySkysweep = function (p) {
+    if (!p || !p.alive || (p.flare || 0) <= 0) return;
+    var list = vals(this.players), i, o, n = 0;
+    p.flare -= 1;
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      if (!o.alive || o.id === p.id || !this.hostile(p, o)) continue;
+      if (dist(p.x, p.y, o.x, o.y) < V2.flareRad) {
+        this.hitShip(o, o.maxHull || 100, p.id);
+        n++;
+      }
+    }
+    this.emit("flare", { sid: p.id, n: n });
+  };
+
+  Game.prototype.v2TryRoulette = function (p) {
+    if (!p || !p.alive || (p.rouletteCd || 0) > 0 || (p.fuel || 0) < 22) return;
+    var ang = Math.random() * TAU, rad = 120 + Math.random() * 520;
+    p.x = clamp(p.x + Math.cos(ang) * rad, 40, 1560);
+    p.y = clamp(p.y + Math.sin(ang) * rad, 40, 1560);
+    p.warp = 0;
+    p.vx = 0;
+    p.vy = 0;
+    p.fuel -= 22;
+    p.rouletteCd = V2.rouletteCd;
+    p.invuln = Math.max(p.invuln || 0, 0.28);
+    if (Math.random() < V2.rouletteRisk) this.hitShip(p, V2.rouletteChip, null);
+    this.emit("warp", { sid: p.id });
+  };
+
+  Game.prototype.v2TryGhostTrace = function (p) {
+    if (!p || !p.alive || (p.traceCd || 0) > 0 || (p.fuel || 0) < V2.traceFuel) return;
+    var tr = p.trace || [];
+    if (tr.length < V2.traceDepth) return;
+    var pt = tr[tr.length - V2.traceDepth];
+    p.x = pt.x;
+    p.y = pt.y;
+    p.vx = 0;
+    p.vy = 0;
+    p.fuel -= V2.traceFuel;
+    p.traceCd = V2.traceCd;
+    p.invuln = Math.max(p.invuln || 0, 0.45);
+    this.emit("trace", { sid: p.id });
+  };
+
+  Game.prototype.v2TryCometLure = function (p) {
+    if (!p || !p.alive || (p.lureCd || 0) > 0 || (p.fuel || 0) < 10) return;
+    var a = angTo(p.x, p.y, V2.nexusX, V2.nexusY);
+    this.lures.push({
+      x: p.x + Math.cos(p.ang) * 20,
+      y: p.y + Math.sin(p.ang) * 20,
+      vx: Math.cos(a) * 26,
+      vy: Math.sin(a) * 26,
+      life: V2.lureLife,
+      race: p.race
+    });
+    p.lureCd = V2.lureCd;
+    p.fuel -= 10;
+    this.emit("lure", { sid: p.id });
+  };
+
+  Game.prototype.v2TryRimRipper = function (p) {
+    if (!p || !p.alive || (p.ripperCd || 0) > 0 || (p.fuel || 0) < 16) return;
+    var list = vals(this.players), i, o, d, want, n = 0;
+    p.ripperCd = V2.ripperCd;
+    p.fuel -= 16;
+    for (i = 0; i < list.length; i++) {
+      o = list[i];
+      if (!o.alive || o.id === p.id || !this.hostile(p, o)) continue;
+      d = dist(p.x, p.y, o.x, o.y);
+      if (d > V2.ripperReach || d < 4) continue;
+      want = angTo(p.x, p.y, o.x, o.y);
+      var diff = want - p.ang;
+      while (diff > Math.PI) diff -= TAU;
+      while (diff < -Math.PI) diff += TAU;
+      if (Math.abs(diff) > 0.5) continue;
+      this.hitShip(o, 48 + (o.boss ? 18 : 0), p.id);
+      n++;
+    }
+    this.emit("ripper", { sid: p.id, n: n });
+  };
+
+  Game.prototype.tickV2Gx = function (dt) {
+    var i, lure, list = vals(this.players), p, j, o;
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p.alive) continue;
+      p.ripperCd = Math.max(0, (p.ripperCd || 0) - dt);
+      p.rouletteCd = Math.max(0, (p.rouletteCd || 0) - dt);
+      p.lureCd = Math.max(0, (p.lureCd || 0) - dt);
+      p.traceCd = Math.max(0, (p.traceCd || 0) - dt);
+      p.phaseT = Math.max(0, (p.phaseT || 0) - dt);
+      var inp = p.inp || {};
+      if (inp.q && !p.didQ) this.v2TrySkysweep(p);
+      if (inp.j && !p.didJ) this.v2TryRoulette(p);
+      if (inp.y && !p.didY) this.v2TryGhostTrace(p);
+      if (inp.i && !p.didI) this.v2TryCometLure(p);
+      if (inp.z && !p.didZ) this.v2TryRimRipper(p);
+      p.didQ = !!inp.q;
+      p.didJ = !!inp.j;
+      p.didY = !!inp.y;
+      p.didI = !!inp.i;
+      p.didZ = !!inp.z;
+      p.traceAcc = (p.traceAcc || 0) + dt;
+      if (p.traceAcc >= V2.traceStep) {
+        p.traceAcc = 0;
+        if (!p.trace) p.trace = [];
+        p.trace.push({ x: p.x, y: p.y });
+        if (p.trace.length > 8) p.trace.shift();
+      }
+    }
+    for (i = this.lures.length - 1; i >= 0; i--) {
+      lure = this.lures[i];
+      lure.life -= dt;
+      lure.x += lure.vx * dt;
+      lure.y += lure.vy * dt;
+      if (lure.life <= 0) this.lures.splice(i, 1);
+    }
+    for (i = 0; i < list.length; i++) {
+      p = list[i];
+      if (!p.alive || p.ai) continue;
+      for (j = 0; j < this.lures.length; j++) {
+        lure = this.lures[j];
+        if (lure.race === p.race) continue;
+        if (dist(p.x, p.y, lure.x, lure.y) < V2.lurePull) {
+          var want = angTo(p.x, p.y, lure.x, lure.y);
+          p.ang += angNorm(want - p.ang) * Math.min(1, 4 * dt);
+        }
+      }
+    }
   };
 
   Game.prototype.arcadeSpawnContract = function () {
@@ -783,6 +999,11 @@
     p.invuln = first ? 2.2 : 1.8;
     p.torpCd = 0.0; p.phaserCd = 0.0; p.beamCd = 0.0; p.hyperCd = 0.0;
     p.hyperI = 0.0; p.repairing = false; p.lostArmies = 0;
+    p.vx = 0; p.vy = 0;
+    p.trace = []; p.traceAcc = 0;
+    p.phaseT = 0;
+    p.flare = V2.flareStart;
+    p.ripperCd = 0; p.rouletteCd = 0; p.lureCd = 0; p.traceCd = 0;
     p.score = keepScore;
     p.lastHit = null;
     p.dmgMul = 1.0;
@@ -932,6 +1153,7 @@
 
   Game.prototype.hitShip = function (ship, dmg, srcId) {
     if ((ship.invuln || 0) > 0 || (ship.hyperI || 0) > 0) return;
+    if (this.v2PhaseActive(ship)) return;
     if (srcId && this.players[srcId]) ship.lastHit = srcId;
     if (ship.shieldsOn && (ship.shields || 0) > 0) {
       var soak = Math.min(ship.shields, dmg * 0.82);
@@ -942,6 +1164,9 @@
     if (dmg > 0) {
       ship.hull -= dmg;
       ship.flash = 0.18;
+      var kb = V2.slipKick * dmg * 0.04;
+      ship.vx = (ship.vx || 0) - Math.cos(ship.ang) * kb;
+      ship.vy = (ship.vy || 0) - Math.sin(ship.ang) * kb;
     }
     if (ship.hull <= 0 && ship.alive) this.killShip(ship);
   };
@@ -1274,8 +1499,9 @@
     if (dock && dock.storm) sp *= ARCADE.stormSlow;
     p.x += Math.cos(p.ang) * sp * dt;
     p.y += Math.sin(p.ang) * sp * dt;
-    p.x = clamp(p.x, -80, 1680);
-    p.y = clamp(p.y, -80, 1680);
+    this.v2SolarShear(p, dt);
+    this.v2OrbitKiss(p, dt);
+    this.v2ApplyDrift(p, dt);
 
     var burn = fuelBurn(p.warp || 0, p.shieldsOn) * dailyFuelMulGx(this);
     if (afterOn) burn += fuelBurn(p.warp || 0, false) * (ARCADE.afterFuel - 1);
@@ -1311,6 +1537,7 @@
       if (!p.didS) {
         p.shieldsOn = !p.shieldsOn;
         if (p.fuel <= 0) p.shieldsOn = false;
+        if (p.shieldsOn) p.phaseT = V2.silkT;
       }
       p.didS = true;
     } else p.didS = false;
@@ -1505,6 +1732,7 @@
     this.updatePlanets(dt);
     this.tickChaos(dt);
     this.tickArcadeGx(dt);
+    this.tickV2Gx(dt);
     if (this.tickN % 8 === 0) this.checkOutcome();
     this.sweepStale();
   };
@@ -1634,6 +1862,13 @@
         out.mn.push([r1(m.x), r1(m.y)]);
       }
     }
+    if (this.lures.length) {
+      out.lu = [];
+      for (i = 0; i < this.lures.length; i++) {
+        out.lu.push([r1(this.lures[i].x), r1(this.lures[i].y)]);
+      }
+    }
+    out.ver = "v2";
     return out;
   };
 

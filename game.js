@@ -53,6 +53,35 @@
     { id: "ion", name: "ION SEASON", desc: "Extra ion storms on worlds", stormMul: 2.5 }
   ];
   var CONTRACT_TYPES = ["hunt", "haul", "hold"];
+  var GAME_VERSION = "v2";
+
+  /* V2 PACK — gravity, dilation, defender/tempest tools, ghost trace, phase silk */
+  var V2 = {
+    shear: 52000,
+    lensNear: 120,
+    lensFar: 520,
+    lensMul: 1.55,
+    flareRad: 320,
+    flareStart: 2,
+    ripperReach: 220,
+    ripperCd: 42,
+    rouletteCd: 9,
+    rouletteRisk: 0.18,
+    rouletteChip: 8,
+    traceStep: 1.4,
+    traceDepth: 3,
+    traceCd: 5.5,
+    traceFuel: 14,
+    silkT: 0.38,
+    lureLife: 9,
+    lureCd: 11,
+    lurePull: 360,
+    slipKick: 1.15,
+    orbitBoost: 1.22,
+    orbitBand: 52,
+    driftDamp: 0.92
+  };
+  var V2_GAS_IDS = { jupiter: 1, saturn: 1 };
 
   function dailyRule() {
     var d = new Date();
@@ -720,7 +749,15 @@
       invuln: 1.6,
       score: (g.score || 0),
       buff: null, buffT: 0,
-      empCd: 0
+      empCd: 0,
+      vx: 0, vy: 0,
+      trace: [], traceAcc: 0,
+      phaseT: 0,
+      flare: V2.flareStart,
+      ripperCd: 0,
+      rouletteCd: 0,
+      lureCd: 0,
+      traceCd: 0
     };
     applyPlayerUpgrades(g);
   }
@@ -1142,8 +1179,246 @@
         nStorm--;
       }
     }
+    initV2State(g);
     arcadeSpawnContract(g);
     arcadePickBounty(g);
+  }
+  function initV2State(g) {
+    g.lures = [];
+    g.v2Pulse = 0;
+    g.v2Ripple = 0;
+  }
+  function v2PhaseActive(p) {
+    return p && p.alive && (p.phaseT || 0) > 0;
+  }
+  function v2SolarShear(ship, cx, cy, dt) {
+    if (!ship || !ship.alive) return;
+    var dx = cx - ship.x, dy = cy - ship.y;
+    var d2 = dx * dx + dy * dy;
+    var minD = 48;
+    if (d2 < minD * minD) d2 = minD * minD;
+    var pull = V2.shear / d2;
+    ship.vx = (ship.vx || 0) + dx * pull * dt;
+    ship.vy = (ship.vy || 0) + dy * pull * dt;
+  }
+  function v2ApplyDrift(ship, dt) {
+    if (!ship || !ship.alive) return;
+    ship.x += (ship.vx || 0) * dt;
+    ship.y += (ship.vy || 0) * dt;
+    var damp = Math.pow(V2.driftDamp, dt * 60);
+    ship.vx = (ship.vx || 0) * damp;
+    ship.vy = (ship.vy || 0) * damp;
+  }
+  function v2OrbitKiss(ship, dt) {
+    if (!G || !ship.alive || (ship.warp || 0) <= 0) return;
+    var i, b, d, band, tx, ty, tang, dot, sp;
+    for (i = 0; i < G.bodies.length; i++) {
+      b = G.bodies[i];
+      if (b.kind !== "planet" || (!V2_GAS_IDS[b.id] && b.r < 17)) continue;
+      d = dist(ship.x, ship.y, b.x, b.y);
+      band = b.r + V2.orbitBand;
+      if (d > band + 30 || d < b.r + 8) continue;
+      tx = -(ship.y - b.y);
+      ty = ship.x - b.x;
+      tang = Math.atan2(ty, tx);
+      dot = Math.cos(tang - ship.ang);
+      if (Math.abs(dot) < 0.35) continue;
+      sp = warpSpeed(ship.warp) * (V2.orbitBoost - 1) * dt * 0.85;
+      ship.x += Math.cos(tang) * sp * (dot > 0 ? 1 : -1);
+      ship.y += Math.sin(tang) * sp * (dot > 0 ? 1 : -1);
+      if (ship === G.player && G.status.indexOf("ORBIT KISS") < 0) G.status = "ORBIT KISS — SLING BOOST";
+    }
+  }
+  function v2EnemyDtMul() {
+    if (!G || !G.map || !G.map.sun || !G.player || !G.player.alive) return 1;
+    var d = dist(G.player.x, G.player.y, G.map.sun.x, G.map.sun.y);
+    if (d >= V2.lensFar) return 1;
+    if (d <= V2.lensNear) return V2.lensMul;
+    return lerp(V2.lensMul, 1, (d - V2.lensNear) / (V2.lensFar - V2.lensNear));
+  }
+  function v2LurePoint() {
+    var best = null, bd = 1e9, i, e, d;
+    if (!G || !G.lures) return null;
+    for (i = 0; i < G.lures.length; i++) {
+      e = G.lures[i];
+      if (e.life <= 0) continue;
+      d = dist(G.player.x, G.player.y, e.x, e.y);
+      if (d < bd) { bd = d; best = e; }
+    }
+    return best;
+  }
+  function v2TrySkysweep(p) {
+    if (!G || !p || !p.alive || (p.flare || 0) <= 0) return;
+    var i, e, n = 0;
+    p.flare -= 1;
+    for (i = 0; i < G.enemies.length; i++) {
+      e = G.enemies[i];
+      if (!e.alive) continue;
+      if (dist(p.x, p.y, e.x, e.y) < V2.flareRad) {
+        hitShip(e, e.maxHull || 80, false);
+        n++;
+      }
+    }
+    G.v2Ripple = 0.55;
+    G.banner = "SKYSWEEP FLARE — " + n + " HOSTILES";
+    G.bannerT = 2;
+    G.status = "FLARE SPENT — BULLETS STILL FLY";
+    audio.noise(0.22, 0.2);
+    audio.beep(90, 0.35, "sawtooth", 0.2, 40);
+  }
+  function v2TryRoulette(p) {
+    if (!G || !p || !p.alive || (p.rouletteCd || 0) > 0 || p.fuel < 22) return;
+    var rng = G.rng, ang = rng() * TAU, rad = 180 + rng() * 720;
+    p.x += Math.cos(ang) * rad;
+    p.y += Math.sin(ang) * rad;
+    p.warp = 0;
+    p.vx = 0;
+    p.vy = 0;
+    p.fuel -= 22;
+    p.rouletteCd = V2.rouletteCd;
+    p.invuln = Math.max(p.invuln || 0, 0.28);
+    if (rng() < V2.rouletteRisk) {
+      hitShip(p, V2.rouletteChip, true);
+      G.status = "VOID ROULETTE — BAD EXIT";
+    } else {
+      G.status = "VOID ROULETTE — BLIND RELOCATE";
+    }
+    burst(p.x, p.y, 16, "#a0c8ff", 70, false);
+    audio.warp(true);
+  }
+  function v2TryGhostTrace(p) {
+    if (!G || !p || !p.alive || (p.traceCd || 0) > 0 || p.fuel < V2.traceFuel) return;
+    var tr = p.trace || [];
+    if (tr.length < V2.traceDepth) {
+      G.status = "GHOST TRACE — NEED " + V2.traceDepth + " WAKE POINTS";
+      return;
+    }
+    var pt = tr[tr.length - V2.traceDepth];
+    p.x = pt.x;
+    p.y = pt.y;
+    p.vx = 0;
+    p.vy = 0;
+    p.fuel -= V2.traceFuel;
+    p.traceCd = V2.traceCd;
+    p.invuln = Math.max(p.invuln || 0, 0.45);
+    G.status = "GHOST TRACE — WARP BACK";
+    G.banner = "RECORDER REWIND";
+    G.bannerT = 1.8;
+    burst(p.x, p.y, 10, "#c8ffe0", 50, false);
+    audio.beep(440, 0.1, "sine", 0.12, 220);
+  }
+  function v2TryCometLure(p) {
+    if (!G || !p || !p.alive || (p.lureCd || 0) > 0 || p.fuel < 10) return;
+    var sun = G.map.sun;
+    var a = angTo(p.x, p.y, sun.x, sun.y);
+    G.lures.push({
+      x: p.x + Math.cos(p.ang) * 24,
+      y: p.y + Math.sin(p.ang) * 24,
+      vx: Math.cos(a) * 28,
+      vy: Math.sin(a) * 28,
+      life: V2.lureLife
+    });
+    p.lureCd = V2.lureCd;
+    p.fuel -= 10;
+    G.status = "COMET LURE — SUNWARD DECOY";
+    audio.beep(300, 0.08, "triangle", 0.1, 180);
+  }
+  function v2TryRimRipper(p) {
+    if (!G || !p || !p.alive || (p.ripperCd || 0) > 0 || p.fuel < 16) return;
+    var i, e, d, want, n = 0;
+    p.ripperCd = V2.ripperCd;
+    p.fuel -= 16;
+    for (i = 0; i < G.enemies.length; i++) {
+      e = G.enemies[i];
+      if (!e.alive) continue;
+      d = dist(p.x, p.y, e.x, e.y);
+      if (d > V2.ripperReach || d < 4) continue;
+      want = angTo(p.x, p.y, e.x, e.y);
+      if (Math.abs(angNorm(want - p.ang)) > 0.5) continue;
+      hitShip(e, 55 + (e.boss ? 20 : 0), false);
+      n++;
+    }
+    G.phaserFlash = { x: p.x, y: p.y, ang: p.ang, t: 0.18, reach: V2.ripperReach, half: 0.5 };
+    G.status = "RIM RIPPER — " + n + " IN ARC";
+    G.banner = "SUPER RIPPER BURST";
+    G.bannerT = 1.6;
+    audio.sfxPhaserFire();
+  }
+  function tickV2(dt) {
+    if (!G) return;
+    var p = G.player, i, lure;
+    G.v2Pulse = Math.max(0, (G.v2Pulse || 0) - dt);
+    G.v2Ripple = Math.max(0, (G.v2Ripple || 0) - dt);
+    if (p && p.alive) {
+      p.ripperCd = Math.max(0, (p.ripperCd || 0) - dt);
+      p.rouletteCd = Math.max(0, (p.rouletteCd || 0) - dt);
+      p.lureCd = Math.max(0, (p.lureCd || 0) - dt);
+      p.traceCd = Math.max(0, (p.traceCd || 0) - dt);
+      p.phaseT = Math.max(0, (p.phaseT || 0) - dt);
+      if (just.q) v2TrySkysweep(p);
+      if (just.j) v2TryRoulette(p);
+      if (just.y) v2TryGhostTrace(p);
+      if (just.i) v2TryCometLure(p);
+      if (just.z) v2TryRimRipper(p);
+      p.traceAcc = (p.traceAcc || 0) + dt;
+      if (p.traceAcc >= V2.traceStep) {
+        p.traceAcc = 0;
+        if (!p.trace) p.trace = [];
+        p.trace.push({ x: p.x, y: p.y });
+        if (p.trace.length > 8) p.trace.shift();
+      }
+    }
+    for (i = G.lures.length - 1; i >= 0; i--) {
+      lure = G.lures[i];
+      lure.life -= dt;
+      lure.x += lure.vx * dt;
+      lure.y += lure.vy * dt;
+      if (lure.life <= 0) G.lures.splice(i, 1);
+    }
+  }
+  function drawV2Overlay(wts, zoom) {
+    var i, s, lure, sun, ps, d, pulse;
+    if (!G || G.mapOpen) return;
+    if (G.lures) {
+      for (i = 0; i < G.lures.length; i++) {
+        lure = G.lures[i];
+        s = wts(lure.x, lure.y);
+        ctx.save();
+        ctx.fillStyle = "#ff70c8";
+        ctx.globalAlpha = 0.75;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, 5 * zoom, 0, TAU);
+        ctx.fill();
+        ctx.strokeStyle = "#ffd0f0";
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    if (G.map && G.map.sun && G.player && G.player.alive) {
+      sun = G.map.sun;
+      d = dist(G.player.x, G.player.y, sun.x, sun.y);
+      if (d < V2.lensFar) {
+        ps = wts(sun.x, sun.y);
+        pulse = 0.25 + 0.15 * Math.sin(G.time * 3);
+        ctx.save();
+        ctx.strokeStyle = "rgba(160,200,255," + pulse + ")";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(ps.x, ps.y, (sun.r + 28) * zoom, 0, TAU);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+    if (G.v2Ripple > 0 && G.player) {
+      s = wts(G.player.x, G.player.y);
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,200,120," + (G.v2Ripple * 0.9) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, V2.flareRad * zoom * (1.1 - G.v2Ripple), 0, TAU);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
   function arcadeSpawnContract(g) {
     if (!g || g.contracts.length >= 1) return;
@@ -1614,6 +1889,7 @@
 
   function hitShip(ship, dmg, isPlayer) {
     if (isPlayer && ship.invuln > 0) return;
+    if (isPlayer && v2PhaseActive(ship)) return;
     if (isPlayer && ship.shieldsOn && ship.shields > 0) {
       var soak = Math.min(ship.shields, dmg * 0.85);
       ship.shields -= soak;
@@ -1625,6 +1901,11 @@
       ship.hull -= dmg;
       ship.flash = 0.18;
       audio.noise(0.08, 0.1);
+      if (isPlayer) {
+        var kb = V2.slipKick * dmg * 0.045;
+        ship.vx = (ship.vx || 0) - Math.cos(ship.ang) * kb;
+        ship.vy = (ship.vy || 0) - Math.sin(ship.ang) * kb;
+      }
     }
     if (isPlayer) G.rumble = Math.min(1, G.rumble + 0.25);
     if (ship.hull <= 0) {
@@ -1889,7 +2170,11 @@
     if (dPlayer < huntR) e.huntT = 2.4;
     if (e.huntT > 0) e.huntT -= dt;
 
-    if (e.huntT > 0 && p.alive) {
+    var lure = v2LurePoint();
+    if (lure && dist(e.x, e.y, lure.x, lure.y) < V2.lurePull) {
+      e.state = "lure";
+      steerToward(e, lure.x, lure.y, dt, 5);
+    } else if (e.huntT > 0 && p.alive) {
       e.state = "hunt";
       var lead = warpSpeed(p.warp) * 0.25;
       steerToward(e, p.x + Math.cos(p.ang) * lead, p.y + Math.sin(p.ang) * lead, dt, 6);
@@ -1938,6 +2223,8 @@
     var sp = warpSpeed(e.warp);
     e.x += Math.cos(e.ang) * sp * dt;
     e.y += Math.sin(e.ang) * sp * dt;
+    if (G.map && G.map.sun) v2SolarShear(e, G.map.sun.x, G.map.sun.y, dt);
+    v2ApplyDrift(e, dt);
     e.flash = Math.max(0, e.flash - dt);
 
     if (p.alive && dist(e.x, e.y, p.x, p.y) < 16) {
@@ -2022,7 +2309,7 @@
       if (!hit && (pr.side === "enemy" || pr.side === "worldE" || pr.side === "worldF")) {
         var p = G.player;
         if (p.alive && dist(pr.x, pr.y, p.x, p.y) < 11 + pr.r) {
-          if (pr.side !== "worldF") {
+          if (pr.side !== "worldF" && !v2PhaseActive(p)) {
             hitShip(p, pr.dmg, true);
             burst(pr.x, pr.y, 8, "#ff8060", 40);
             G.lastNearFire = 0;
@@ -2135,6 +2422,9 @@
     if (dock && arcadeBodyStorm(dock)) sp *= ARCADE.stormSlow;
     p.x += Math.cos(p.ang) * sp * dt;
     p.y += Math.sin(p.ang) * sp * dt;
+    if (G.map && G.map.sun) v2SolarShear(p, G.map.sun.x, G.map.sun.y, dt);
+    v2OrbitKiss(p, dt);
+    v2ApplyDrift(p, dt);
 
     var burn = fuelBurn(p.warp, p.shieldsOn) * dailyFuelMul();
     if (afterOn) burn += fuelBurn(p.warp, false) * (ARCADE.afterFuel - 1);
@@ -2227,6 +2517,7 @@
     if (just.s) {
       p.shieldsOn = !p.shieldsOn;
       if (p.fuel <= 0) p.shieldsOn = false;
+      if (p.shieldsOn) p.phaseT = V2.silkT;
       G.status = p.shieldsOn ? "SHIELDS UP" : "SHIELDS DOWN";
       audio.beep(p.shieldsOn ? 500 : 220, 0.08, "square", 0.1);
     }
@@ -2496,6 +2787,7 @@
       for (var poi = 0; poi < G.pods.length; poi++) drawChaosPod(G.pods[poi], worldToScreen, G.zoom);
     }
     if (!G.mapOpen) drawArcadeOverlay(worldToScreen, G.zoom);
+    if (!G.mapOpen) drawV2Overlay(worldToScreen, G.zoom);
 
     for (var ei = 0; ei < G.enemies.length; ei++) {
       var en = G.enemies[ei];
@@ -2645,11 +2937,12 @@
     else toy += "EMP·E ";
     if (G.wingman && G.wingman.life > 0) toy += "WING " + Math.ceil(G.wingman.life) + "s ";
     if (toy) chaosLine += "<br><span style='color:#7a9a7a;font-size:11px'>" + toy + "SHIFT burn · hold T scoop · V hire</span>";
+    var v2line = "<br><span style='color:#8ac0ff;font-size:11px'>RINGFIRE " + GAME_VERSION + " · Q flare " + (p.flare | 0) + " · Z ripper · J roulette · Y trace · I lure</span>";
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (p.warp > 0 ? p.warp : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(p.fuel, p.maxFuel, 10) + " " + Math.floor(p.fuel) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(p.hull, p.maxHull, 10) + " " + Math.floor(p.hull) + "</span><br><b>SHLD</b> <span class='" + shC + "'>" + sh + " " + bar(p.shields, p.maxShields, 8) + "</span></div>" +
       "<div class='cell'><b>MARINES</b> " + p.armies + "/" + p.maxArmies + "<br><b>MISSILES</b> " + p.missiles + "/" + p.maxMissiles + "</div>" +
-      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span>" + chaosLine + "</div>";
+      "<div class='cell'><b>SCORE</b> " + (G.score || 0) + "  <b>TIER</b> T" + (G.upgradeTier || 0) + (G.upgradeTier ? " +" + (G.upgradeTier * 10) + "%" : "") + "<br><b>TGT</b> " + tname + " " + town + "  <b>TIME</b> " + fmtTime(G.time) + "  <b>WORLDS</b> " + fp + "/9<br><span style='color:#9a9'>" + G.status + "</span>" + chaosLine + v2line + "</div>";
     if (G.bannerT > 0) {
       el.banner.textContent = G.banner;
       el.banner.className = G.bannerAlert ? "alert" : "";
@@ -2740,7 +3033,7 @@
     for (var i = 0; i < items.length; i++) items[i].classList.toggle("sel", i === titleSel);
     var dr = dailyRule();
     if (el.titleBubble && dr) {
-      el.titleBubble.textContent = "DAILY MUTATOR — " + dr.name + ": " + dr.desc;
+      el.titleBubble.textContent = "RINGFIRE " + GAME_VERSION + " — DAILY: " + dr.name + ": " + dr.desc;
     }
   }
 
@@ -3132,11 +3425,13 @@
 
     updateBodies(sdt);
     updatePlayer(sdt);
-    for (var i = 0; i < G.enemies.length; i++) updateEnemy(G.enemies[i], sdt);
+    var eMul = v2EnemyDtMul();
+    for (var i = 0; i < G.enemies.length; i++) updateEnemy(G.enemies[i], sdt * eMul);
     tickEnemyRespawn(sdt);
     updateProjectiles(sdt);
     tickChaos(sdt);
     tickArcade(sdt);
+    tickV2(sdt);
     maybeSpawnSolBoss();
     solMusicThreat();
     updateCamera(dt);
@@ -3377,6 +3672,11 @@
       ab: (keys.shift || keys.shiftleft || keys.shiftright) ? 1 : 0,
       emp: emp,
       tr: keys.t ? 1 : 0,
+      q: keys.q ? 1 : 0,
+      j: keys.j ? 1 : 0,
+      y: keys.y ? 1 : 0,
+      i: keys.i ? 1 : 0,
+      z: keys.z ? 1 : 0,
       w: GX.warp
     };
   }
@@ -4467,6 +4767,15 @@
         ctx.stroke();
       }
     }
+    if (!GX.mapOpen && st.lu) {
+      for (i = 0; i < st.lu.length; i++) {
+        var ls = gxWTS(st.lu[i][0], st.lu[i][1]);
+        ctx.fillStyle = "#ff70c8";
+        ctx.beginPath();
+        ctx.arc(ls.x, ls.y, 5 * GX.zoom, 0, TAU);
+        ctx.fill();
+      }
+    }
     if (!GX.mapOpen && st.mn) {
       for (i = 0; i < st.mn.length; i++) {
         var ms = gxWTS(st.mn[i][0], st.mn[i][1]);
@@ -4576,11 +4885,12 @@
     if (me.wg) toyGx += "WING " + Math.ceil(me.wg) + "s ";
     if (st.ct && st.ct[0]) toyGx += "CT " + st.ct[0][2] + " ";
     if (toyGx) chaosLine += "<br><span style='color:#7a9a7a;font-size:11px'>" + toyGx + "SHIFT burn · hold T scoop</span>";
+    var v2gx = "<br><span style='color:#8ac0ff;font-size:11px'>RINGFIRE " + (st.ver || GAME_VERSION) + " · Q Z J Y I</span>";
     el.hud.innerHTML =
       "<div class='cell'><b>WARP</b> " + (me.w > 0 ? me.w : "0 IMP") + "<br><b>FUEL</b> <span class='" + fuelC + "'>" + bar(me.f, me.F || 140, 10) + " " + Math.floor(me.f) + "</span></div>" +
       "<div class='cell'><b>HULL</b> <span class='" + hullC + "'>" + bar(me.h, me.H || 100, 10) + " " + Math.floor(me.h) + "</span><br><b>SHLD</b> " + sh + " " + bar(me.S || 0, me.Q || 70, 8) + "</div>" +
       "<div class='cell'><b>SCORE</b> " + (me.k || 0) + "  <b>TIER</b> T" + (me.u || 0) + ((me.u || 0) ? " +" + (me.u * 10) + "%" : "") + "<br><b>MARINES</b> " + me.m + "/" + me.M + "</div>" +
-      "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span>" + chaosLine + "</div>";
+      "<div class='cell'><b>TGT</b> " + tname + " " + town + "<br><b>TIME</b> " + fmtTime(st.t || 0) + "  <b>WORLDS</b> " + own + "/25<br><span style='color:#9a9'>" + GX.status + "</span>" + chaosLine + v2gx + "</div>";
     if (GX.bannerT > 0) {
       el.banner.textContent = GX.banner;
       el.banner.className = "";
