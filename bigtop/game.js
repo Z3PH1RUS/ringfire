@@ -751,8 +751,8 @@ function updatePlay(dt) {
   let mz = 0;
   if (keys.ArrowLeft || keys.KeyA) mx -= 1;
   if (keys.ArrowRight || keys.KeyD) mx += 1;
-  if (keys.ArrowUp || keys.KeyW) mz -= 1;
-  if (keys.ArrowDown || keys.KeyS) mz += 1;
+  if (keys.ArrowUp || keys.KeyW) mz += 1;
+  if (keys.ArrowDown || keys.KeyS) mz -= 1;
   if (mx || mz) {
     const len = Math.hypot(mx, mz) || 1;
     const fwd = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
