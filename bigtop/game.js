@@ -21,6 +21,7 @@ const hudLives = document.getElementById("hud-lives");
 const hudCombo = document.getElementById("hud-combo");
 const hudComboN = document.getElementById("hud-combo-n");
 const hudMute = document.getElementById("hud-mute");
+const lookHintEl = document.getElementById("look-hint");
 const bannerEl = document.getElementById("banner");
 const overlayTitle = document.getElementById("overlay-title");
 const overlayGameover = document.getElementById("overlay-gameover");
@@ -52,6 +53,11 @@ let lookStartPitch = 0;
 let pointerLockActive = false;
 let clickDownX = 0;
 let clickDownY = 0;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let mouseLookReady = false;
+
+const PITCH_LIMIT = THREE.MathUtils.degToRad(85);
 
 let audioCtx = null;
 let muted = false;
@@ -645,6 +651,8 @@ function resetGame() {
   posZ = 0;
   yaw = 0;
   pitch = 0;
+  lookDragging = false;
+  mouseLookReady = false;
   while (bubbles.length) removeBubble(0);
   while (burstParts.length) {
     scene.remove(burstParts.pop());
@@ -660,6 +668,7 @@ function startPlay() {
   overlayTitle.classList.add("hidden");
   overlayGameover.classList.add("hidden");
   hudEl.classList.remove("hidden");
+  lookHintEl.classList.remove("hidden");
   crosshair.classList.remove("title-mode", "gameover-mode");
   startMusic();
 }
@@ -670,6 +679,7 @@ function gameOver() {
   goScore.textContent = String(score);
   goBest.textContent = String(highScore);
   overlayGameover.classList.remove("hidden");
+  lookHintEl.classList.add("hidden");
   crosshair.classList.add("gameover-mode");
   playBad();
 }
@@ -694,10 +704,20 @@ function updateHud() {
 
 function updateCamera() {
   camera.position.set(posX, EYE_H, posZ);
-  const cy = Math.cos(pitch);
   camera.rotation.order = "YXZ";
   camera.rotation.y = yaw;
   camera.rotation.x = pitch;
+}
+
+function clampPitch() {
+  pitch = THREE.MathUtils.clamp(pitch, -PITCH_LIMIT, PITCH_LIMIT);
+}
+
+function applyLookDelta(dx, dy, sens) {
+  if (!dx && !dy) return;
+  yaw -= dx * sens;
+  pitch -= dy * sens;
+  clampPitch();
 }
 
 function clampMove() {
@@ -870,47 +890,70 @@ function onPointerDown(e) {
   e.preventDefault();
   clickDownX = e.clientX;
   clickDownY = e.clientY;
-  lookDragging = true;
-  lookStartX = e.clientX;
-  lookStartY = e.clientY;
-  lookStartYaw = yaw;
-  lookStartPitch = pitch;
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+  mouseLookReady = true;
   ensureAudio();
+
+  if (e.pointerType === "touch") {
+    lookDragging = true;
+    lookStartX = e.clientX;
+    lookStartY = e.clientY;
+    lookStartYaw = yaw;
+    lookStartPitch = pitch;
+    return;
+  }
+
+  if (
+    e.pointerType === "mouse" &&
+    document.pointerLockElement !== renderer.domElement
+  ) {
+    renderer.domElement.requestPointerLock().catch(() => {});
+  }
 }
 
 function onPointerMove(e) {
-  if (!lookDragging || state !== State.PLAY) return;
+  if (state !== State.PLAY) return;
   const sens = pointerLockActive ? 0.0022 : 0.0035;
-  let dx;
-  let dy;
+
   if (pointerLockActive) {
-    dx = e.movementX;
-    dy = e.movementY;
-    yaw -= dx * sens;
-    pitch -= dy * sens;
-  } else {
-    dx = e.clientX - lookStartX;
-    dy = e.clientY - lookStartY;
+    applyLookDelta(e.movementX, e.movementY, sens);
+    return;
+  }
+
+  if (e.pointerType === "touch" && lookDragging) {
+    const dx = e.clientX - lookStartX;
+    const dy = e.clientY - lookStartY;
     yaw = lookStartYaw - dx * sens;
     pitch = lookStartPitch - dy * sens;
+    clampPitch();
+    return;
   }
-  pitch = THREE.MathUtils.clamp(pitch, -1.35, 1.35);
+
+  if (e.pointerType === "mouse" || e.pointerType === "pen") {
+    if (!mouseLookReady) {
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      mouseLookReady = true;
+      return;
+    }
+    const dx = e.clientX - lastMouseX;
+    const dy = e.clientY - lastMouseY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    applyLookDelta(dx, dy, sens);
+  }
 }
 
 function onPointerUp(e) {
   if (state !== State.PLAY) return;
+  if (e.pointerType === "touch") lookDragging = false;
   const moved = Math.hypot(e.clientX - clickDownX, e.clientY - clickDownY);
-  lookDragging = false;
   if (moved < 12) tryPopRaycast();
 }
 
-function onDblClick() {
-  if (state !== State.PLAY) return;
-  if (document.pointerLockElement === renderer.domElement) {
-    document.exitPointerLock();
-  } else {
-    renderer.domElement.requestPointerLock();
-  }
+function onViewportMouseLeave() {
+  mouseLookReady = false;
 }
 
 window.addEventListener("keydown", (e) => {
@@ -923,7 +966,11 @@ window.addEventListener("keydown", (e) => {
   keys[e.code] = true;
   if (e.code === "Space") {
     e.preventDefault();
-    handleStartGesture();
+    if (state === State.PLAY) tryPopRaycast();
+    else handleStartGesture();
+  }
+  if (e.code === "Escape" && renderer && document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock();
   }
 });
 
@@ -941,9 +988,9 @@ function rendererSetup() {
   loadHighScore();
   window.addEventListener("resize", onResize);
   viewport.addEventListener("pointerdown", onPointerDown);
+  viewport.addEventListener("mouseleave", onViewportMouseLeave);
   window.addEventListener("pointermove", onPointerMove);
   window.addEventListener("pointerup", onPointerUp);
-  viewport.addEventListener("dblclick", onDblClick);
   overlayTitle.addEventListener("click", handleStartGesture);
   overlayGameover.addEventListener("click", handleStartGesture);
   crosshair.classList.add("title-mode");
