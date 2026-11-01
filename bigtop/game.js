@@ -135,7 +135,7 @@ function spawnRate() {
   return Math.max(0.32, 1.05 - act * 0.075);
 }
 
-function playTone(type, freq, t0, dur, vol, freqEnd) {
+function playTone(type, freq, t0, dur, vol, freqEnd, out) {
   const ac = ensureAudio();
   if (!ac || muted) return;
   if (ac.state === "suspended") ac.resume();
@@ -153,7 +153,7 @@ function playTone(type, freq, t0, dur, vol, freqEnd) {
   gain.gain.setValueAtTime(vol, t);
   gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
   osc.connect(gain);
-  gain.connect(ac.destination);
+  gain.connect(out || ac.destination);
   osc.start(t);
   osc.stop(t + dur + 0.02);
 }
@@ -243,15 +243,19 @@ function playSnare(t) {
 }
 
 function scheduleMusic() {
-  if (!musicStarted || !audioCtx) return;
+  if (!musicStarted || !audioCtx || state === State.GAMEOVER) {
+    musicRaf = 0;
+    return;
+  }
   const ac = audioCtx;
   const now = ac.currentTime;
   const bd = beatDuration();
+  const bus = musicMaster;
 
   while (musicNextBeat < now + 0.35) {
     const beatInBar = musicStep % 4;
     const bassFreq = beatInBar % 2 === 0 ? 65.41 : 98;
-    playTone("triangle", bassFreq, musicNextBeat, bd * 0.9, 0.22);
+    playTone("triangle", bassFreq, musicNextBeat, bd * 0.9, 0.22, null, bus);
     if (beatInBar === 0 || beatInBar === 2) playKick(musicNextBeat);
     if (beatInBar === 1 || beatInBar === 3) playSnare(musicNextBeat);
     musicNextBeat += bd;
@@ -262,15 +266,30 @@ function scheduleMusic() {
     const [freq, dur] = MELODY[musicMelodyStep % MELODY.length];
     const noteDur = dur * bd;
     if (freq > 0) {
-      playTone("sine", freq, musicNextMelody, noteDur, 0.08);
-      playTone("square", freq * 1.002, musicNextMelody, noteDur, 0.06);
-      playTone("square", freq * 0.998, musicNextMelody, noteDur * 0.95, 0.05);
+      playTone("sine", freq, musicNextMelody, noteDur, 0.08, null, bus);
+      playTone("square", freq * 1.002, musicNextMelody, noteDur, 0.06, null, bus);
+      playTone("square", freq * 0.998, musicNextMelody, noteDur * 0.95, 0.05, null, bus);
     }
     musicNextMelody += noteDur;
     musicMelodyStep++;
   }
 
   musicRaf = requestAnimationFrame(scheduleMusic);
+}
+
+function stopMusic() {
+  if (musicRaf) {
+    cancelAnimationFrame(musicRaf);
+    musicRaf = 0;
+  }
+  musicStarted = false;
+  if (musicMaster && audioCtx) {
+    const t = audioCtx.currentTime;
+    musicMaster.gain.cancelScheduledValues(t);
+    const cur = musicMaster.gain.value;
+    musicMaster.gain.setValueAtTime(cur, t);
+    musicMaster.gain.linearRampToValueAtTime(0, t + 0.3);
+  }
 }
 
 function startMusic() {
@@ -675,6 +694,7 @@ function startPlay() {
 
 function gameOver() {
   state = State.GAMEOVER;
+  stopMusic();
   saveHighScore();
   goScore.textContent = String(score);
   goBest.textContent = String(highScore);
