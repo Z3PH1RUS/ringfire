@@ -8,11 +8,43 @@
     />
     <title>Bubble Pop Big Top</title>
     <link rel="stylesheet" href="styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="game-wrap">
-      <canvas id="game" aria-label="Bubble Pop Big Top circus game"></canvas>
+      <div id="viewport" aria-label="Bubble Pop Big Top 3D circus game"></div>
+      <div id="crosshair" aria-hidden="true"></div>
+      <div id="hud" class="hidden">
+        <div class="hud-panel">
+          <div>Score: <span id="hud-score">0</span></div>
+          <div>Best: <span id="hud-best">0</span></div>
+          <div>Act <span id="hud-act">1</span></div>
+        </div>
+        <div id="hud-lives" aria-label="Lives"></div>
+        <div id="hud-combo" class="hidden">COMBO x<span id="hud-combo-n">2</span></div>
+        <div id="hud-mute" class="hidden">MUTE</div>
+      </div>
+      <div id="banner" class="hidden"></div>
+      <div id="overlay-title" class="overlay">
+        <h1><span class="title-gold">Bubble Pop</span><br />Big Top</h1>
+        <p class="subtitle">Pop soap bubbles under the big top!</p>
+        <p class="pulse">Tap or click to start</p>
+        <p class="hint">Look: drag · Move: WASD · Pop: click center · M: mute</p>
+        <p class="best">Best: <span id="title-best">0</span></p>
+      </div>
+      <div id="overlay-gameover" class="overlay hidden">
+        <h2>Show's Over!</h2>
+        <p>Score: <span id="go-score">0</span></p>
+        <p>Best: <span id="go-best">0</span></p>
+        <p class="pulse">Tap or click to restart</p>
+      </div>
     </div>
-    <script src="game.js"></script>
+    <script type="module" src="game.js"></script>
   </body>
 </html>
